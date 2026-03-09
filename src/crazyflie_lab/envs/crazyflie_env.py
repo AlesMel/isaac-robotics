@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Dict
 
-import numpy as np
 import torch
+import numpy as np
 from gymnasium import spaces
 from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
 from isaaclab.sim import SimulationCfg
@@ -26,37 +26,32 @@ class CrazyflieEnvCfg(DirectRLEnvCfg):
 
     def __post_init__(self) -> None:
         self.sim.render_interval = self.decimation
-        self.scene.sensor_selection = self.sensor_selection
+        self.scene.configure(self.sensor_selection)
         self.observations.sensor_selection = self.sensor_selection
         self.observations.__post_init__()
         self.scene.__post_init__()
+        self.observation_space = self.observations.build_space_spec()
+        self.action_space = 4
 
 
 class CrazyflieDirectEnv(DirectRLEnv):
     cfg: CrazyflieEnvCfg
 
     def __init__(self, cfg: CrazyflieEnvCfg, render_mode: str | None = None, **kwargs) -> None:
-        self._obs_space = spaces.Dict({"policy": cfg.observations.build_space()})
-        self._action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
         super().__init__(cfg=cfg, render_mode=render_mode, **kwargs)
-
-    @property
-    def observation_space(self) -> spaces.Dict:
-        return self._obs_space
-
-    @property
-    def action_space(self) -> spaces.Box:
-        return self._action_space
+        self.observation_space = cfg.observations.build_space()
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
 
     def _setup_scene(self) -> None:
         super()._setup_scene()
+        self.robot = self.scene["robot"]
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         self.actions = actions.clamp(-1.0, 1.0)
 
     def _apply_action(self) -> None:
-        if hasattr(self, "scene") and hasattr(self.scene, "robot"):
-            self.scene.robot.set_joint_effort_target(self.actions * self.cfg.action_scale)
+        if hasattr(self, "robot"):
+            self.robot.set_joint_effort_target(self.actions * self.cfg.action_scale)
 
     def _get_observations(self) -> Dict[str, Dict[str, torch.Tensor]]:
         obs: Dict[str, torch.Tensor] = {
@@ -76,9 +71,9 @@ class CrazyflieDirectEnv(DirectRLEnv):
         return {"policy": obs}
 
     def _get_state_obs(self) -> torch.Tensor:
-        root_state = self.scene.robot.data.root_state_w
-        lin_vel = self.scene.robot.data.root_lin_vel_b
-        ang_vel = self.scene.robot.data.root_ang_vel_b
+        root_state = self.robot.data.root_state_w
+        lin_vel = self.robot.data.root_lin_vel_b
+        ang_vel = self.robot.data.root_ang_vel_b
         last_action = getattr(self, "actions", torch.zeros(self.num_envs, 4, device=self.device))
         return torch.cat(
             [
@@ -92,13 +87,13 @@ class CrazyflieDirectEnv(DirectRLEnv):
         )
 
     def _get_rewards(self) -> torch.Tensor:
-        height_error = torch.square(self.scene.robot.data.root_pos_w[:, 2] - 1.0)
+        height_error = torch.square(self.robot.data.root_pos_w[:, 2] - 1.0)
         actions = getattr(self, "actions", torch.zeros(self.num_envs, 4, device=self.device))
         action_penalty = 0.01 * torch.sum(torch.square(actions), dim=-1)
         return 1.0 - height_error - action_penalty
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        terminated = self.scene.robot.data.root_pos_w[:, 2] < 0.1
+        terminated = self.robot.data.root_pos_w[:, 2] < 0.1
         time_outs = self.episode_length_buf >= self.max_episode_length - 1
         return terminated, time_outs
 

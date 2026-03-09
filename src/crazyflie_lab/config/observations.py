@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import field
+from dataclasses import dataclass, field
 from typing import Dict
 
 import numpy as np
@@ -10,11 +10,11 @@ from isaaclab.utils import configclass
 from .sensors import SensorSelectionCfg
 
 
-@configclass
+@dataclass
 class ObservationTermSpec:
     key: str
     shape: tuple[int, ...]
-    dtype: type[np.floating] = np.float32
+    dtype: str = "float32"
 
 
 @configclass
@@ -52,11 +52,14 @@ class CrazyflieObservationCfg:
                     low=-np.inf,
                     high=np.inf,
                     shape=term.shape,
-                    dtype=term.dtype,
+                    dtype=np.dtype(term.dtype),
                 )
                 for term in self.terms.values()
             }
         )
+
+    def build_space_spec(self) -> Dict[str, tuple[int, ...]]:
+        return {term.key: term.shape for term in self.terms.values()}
 
     def flatdim(self) -> int:
         return int(sum(np.prod(term.shape, dtype=int) for term in self.terms.values()))

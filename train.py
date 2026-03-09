@@ -2,21 +2,16 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Tuple
-
-ROOT_DIR = Path(__file__).resolve().parent
-SRC_DIR = ROOT_DIR / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
 
 import gymnasium as gym
 import torch
 import torch.nn as nn
 from gymnasium.spaces import Box, Dict as DictSpace
 from gymnasium.spaces.utils import flatdim
-from gymnasium.wrappers import FlattenObservation
 from skrl.agents.torch.ppo import PPO, PPO_DEFAULT_CONFIG
 from skrl.agents.torch.sac import SAC, SAC_DEFAULT_CONFIG
 from skrl.agents.torch.td3 import TD3, TD3_DEFAULT_CONFIG
@@ -26,9 +21,17 @@ from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
 from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.trainers.torch import SequentialTrainer
 
-from crazyflie_lab import ENV_ID, register_env
-from crazyflie_lab.config import SensorSelectionCfg
-from crazyflie_lab.envs import CrazyflieEnvCfg
+
+def bootstrap_isaaclab(cli_args: argparse.Namespace):
+    try:
+        from isaaclab.app import AppLauncher
+    except ImportError as exc:
+        raise RuntimeError(
+            "Isaac Lab is not available in this Python environment. Run this script with the Isaac Lab/Isaac Sim Python launcher."
+        ) from exc
+
+    app_launcher = AppLauncher(cli_args)
+    return app_launcher.app
 
 
 class GaussianPolicy(GaussianMixin, Model):
@@ -86,8 +89,8 @@ def mlp(input_dim: int, hidden_units: Tuple[int, ...], output_dim: int, squash: 
     return nn.Sequential(*layers)
 
 
-def build_sensor_cfg(args: argparse.Namespace) -> SensorSelectionCfg:
-    return SensorSelectionCfg(
+def build_sensor_cfg(args: argparse.Namespace, sensor_selection_cls):
+    return sensor_selection_cls(
         enable_lidar=args.enable_lidar,
         enable_camera=args.enable_camera,
         lidar_channels=args.lidar_channels,
@@ -120,14 +123,19 @@ def wrap_for_skrl(env: gym.Env):
         return wrap_env(env, wrapper="gymnasium")
 
 
-def make_env(sensor_cfg: SensorSelectionCfg, num_envs: int) -> gym.Env:
+def make_env(sensor_cfg, num_envs: int, sim_device: str) -> gym.Env:
+    from crazyflie_lab import ENV_ID, register_env
+    from crazyflie_lab.envs import CrazyflieEnvCfg
+
     register_env()
     cfg = CrazyflieEnvCfg()
     cfg.scene.num_envs = num_envs
     cfg.sensor_selection = sensor_cfg
+    cfg.sim.device = sim_device
+    if str(sim_device).startswith("cpu"):
+        cfg.sim.use_fabric = False
     cfg.__post_init__()
-    env = gym.make(ENV_ID, cfg=cfg)
-    return FlattenObservation(env)
+    return gym.make(ENV_ID, cfg=cfg)
 
 
 def make_ppo_agent(env, memory, device):
@@ -181,11 +189,17 @@ def make_td3_agent(env, memory, device):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train Crazyflie Isaac Lab agents with optional sensors")
+    try:
+        from isaaclab.app import AppLauncher
+
+        AppLauncher.add_app_launcher_args(parser)
+    except ImportError:
+        pass
     parser.add_argument("--algorithm", choices=("ppo", "sac", "td3"), default="ppo")
-    parser.add_argument("--num-envs", type=int, default=64)
+    parser.add_argument("--num_envs", type=int, default=64)
     parser.add_argument("--timesteps", type=int, default=200_000)
     parser.add_argument("--memory-size", type=int, default=1024)
-    parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--rl-device", type=str, default=None)
     parser.add_argument("--enable-lidar", action="store_true")
     parser.add_argument("--enable-camera", action="store_true")
     parser.add_argument("--lidar-channels", type=int, default=16)
@@ -195,27 +209,60 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _device_flag_was_provided(argv: list[str]) -> bool:
+    return any(arg == "--device" or arg.startswith("--device=") for arg in argv)
+
+
 def main() -> None:
     args = parse_args()
-    sensor_cfg = build_sensor_cfg(args)
-    env = make_env(sensor_cfg, num_envs=args.num_envs)
-    modality_dims = compute_modality_dims(env.unwrapped.observation_space)
-    flat_obs_dim = flatdim(env.observation_space)
-    print(f"Active observation modalities: {modality_dims}")
-    print(f"Flattened policy input dimension: {flat_obs_dim}")
-
-    wrapped_env = wrap_for_skrl(env)
-    memory = RandomMemory(memory_size=args.memory_size, num_envs=args.num_envs, device=args.device)
-
-    if args.algorithm == "ppo":
-        agent = make_ppo_agent(wrapped_env, memory, args.device)
-    elif args.algorithm == "sac":
-        agent = make_sac_agent(wrapped_env, memory, args.device)
+    if _device_flag_was_provided(sys.argv[1:]):
+        sim_device = getattr(args, "device", "cuda:0" if torch.cuda.is_available() else "cpu")
     else:
-        agent = make_td3_agent(wrapped_env, memory, args.device)
+        sim_device = "cpu"
+    rl_device = args.rl_device if args.rl_device is not None else sim_device
+    print("[train] Bootstrapping Isaac Lab...", flush=True)
+    simulation_app = bootstrap_isaaclab(args)
 
-    trainer = SequentialTrainer(cfg={"timesteps": args.timesteps, "headless": True}, env=wrapped_env, agents=agent)
-    trainer.train()
+    try:
+        from crazyflie_lab.config import SensorSelectionCfg
+
+        print("[train] Building sensor configuration...", flush=True)
+        sensor_cfg = build_sensor_cfg(args, SensorSelectionCfg)
+        print(f"[train] Simulation device: {sim_device}", flush=True)
+        print(f"[train] RL device: {rl_device}", flush=True)
+        if not _device_flag_was_provided(sys.argv[1:]):
+            print("[train] No --device provided; defaulting simulation to CPU for safer startup.", flush=True)
+        print(f"[train] Creating environment with {args.num_envs} env(s)...", flush=True)
+        env = make_env(sensor_cfg, num_envs=args.num_envs, sim_device=sim_device)
+        modality_dims = compute_modality_dims(env.unwrapped.observation_space)
+        flat_obs_dim = sum(modality_dims.values())
+        print(f"[train] Active observation modalities: {modality_dims}", flush=True)
+        print(f"[train] Flattened policy input dimension: {flat_obs_dim}", flush=True)
+
+        print("[train] Wrapping environment for skrl...", flush=True)
+        wrapped_env = wrap_for_skrl(env)
+        print(f"[train] Allocating replay/rollout memory on {rl_device}...", flush=True)
+        memory = RandomMemory(memory_size=args.memory_size, num_envs=args.num_envs, device=rl_device)
+
+        print(f"[train] Creating {args.algorithm.upper()} agent...", flush=True)
+        if args.algorithm == "ppo":
+            agent = make_ppo_agent(wrapped_env, memory, rl_device)
+        elif args.algorithm == "sac":
+            agent = make_sac_agent(wrapped_env, memory, rl_device)
+        else:
+            agent = make_td3_agent(wrapped_env, memory, rl_device)
+
+        print(f"[train] Starting training for {args.timesteps} timesteps...", flush=True)
+        trainer = SequentialTrainer(cfg={"timesteps": args.timesteps, "headless": getattr(args, "headless", True)}, env=wrapped_env, agents=agent)
+        trainer.train()
+        print("[train] Training finished.", flush=True)
+    except Exception:
+        print("[train] Training failed with an exception:", flush=True)
+        traceback.print_exc()
+        raise
+    finally:
+        print("[train] Closing simulation app.", flush=True)
+        simulation_app.close()
 
 
 if __name__ == "__main__":
