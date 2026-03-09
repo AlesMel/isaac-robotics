@@ -50,7 +50,7 @@ def build_lidar_cfg(sensor_cfg: SensorSelectionCfg, prim_path: str) -> Optional[
             horizontal_fov_range=[-180.0, 180.0],
         ),
         debug_vis=False,
-        mesh_prim_paths=["{ENV_REGEX_NS}/World"],
+        mesh_prim_paths=["{ENV_REGEX_NS}/Robot/body"],
         max_distance=sensor_cfg.lidar_max_distance_m,
     )
 

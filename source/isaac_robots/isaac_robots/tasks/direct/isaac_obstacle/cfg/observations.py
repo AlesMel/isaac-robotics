@@ -18,10 +18,10 @@ class ObservationTermSpec:
 
 
 @configclass
-class CrazyflieObservationCfg:
+class ObstacleNavObservationCfg:
     sensor_selection: SensorSelectionCfg = SensorSelectionCfg()
-    base_state_shape: tuple[int, ...] = (17,)
-    include_last_action: bool = True
+    base_state_shape: tuple[int, ...] = (12,)
+    include_last_action: bool = False
     terms: Dict[str, ObservationTermSpec] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -63,3 +63,12 @@ class CrazyflieObservationCfg:
 
     def flatdim(self) -> int:
         return int(sum(np.prod(term.shape, dtype=int) for term in self.terms.values()))
+
+    @property
+    def lidar_flat_dim(self) -> int:
+        if not self.sensor_selection.enable_lidar:
+            return 0
+        return int(np.prod(self.sensor_selection.lidar_scan_shape, dtype=int))
+
+
+WarehouseObservationCfg = ObstacleNavObservationCfg

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 import traceback
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -138,6 +140,46 @@ def make_env(sensor_cfg, num_envs: int, sim_device: str) -> gym.Env:
     return gym.make(ENV_ID, cfg=cfg)
 
 
+def configure_experiment_logging(cfg: dict, args: argparse.Namespace) -> dict:
+    def _parse_interval(value: str) -> int | str:
+        return value if value == "auto" else int(value)
+
+    cfg.setdefault("experiment", {})
+    cfg["experiment"]["write_interval"] = _parse_interval(args.tensorboard_write_interval)
+    cfg["experiment"]["checkpoint_interval"] = _parse_interval(args.checkpoint_interval)
+    cfg["experiment"]["directory"] = str(Path(args.log_dir))
+    cfg["experiment"]["experiment_name"] = args.run_name or f"{args.algorithm}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    return cfg
+
+
+def maybe_launch_tensorboard(args: argparse.Namespace, log_dir: Path) -> subprocess.Popen | None:
+    if not args.tensorboard:
+        return None
+
+    command = [
+        sys.executable,
+        "-m",
+        "tensorboard.main",
+        "--logdir",
+        str(log_dir),
+        "--port",
+        str(args.tensorboard_port),
+        "--host",
+        args.tensorboard_host,
+    ]
+    try:
+        process = subprocess.Popen(command)
+    except Exception as exc:
+        print(f"[train] Failed to launch TensorBoard automatically: {exc}", flush=True)
+        return None
+
+    print(
+        f"[train] TensorBoard started at http://{args.tensorboard_host}:{args.tensorboard_port} for {log_dir}",
+        flush=True,
+    )
+    return process
+
+
 def make_ppo_agent(env, memory, device):
     models = {
         "policy": GaussianPolicy(env.observation_space, env.action_space, device),
@@ -149,10 +191,28 @@ def make_ppo_agent(env, memory, device):
     cfg["mini_batches"] = 4
     cfg["state_preprocessor"] = RunningStandardScaler
     cfg["state_preprocessor_kwargs"] = {"size": flatdim(env.observation_space), "device": device}
+    return cfg
+ 
+
+def make_ppo_agent_from_cfg(env, memory, device, cfg):
+    models = {
+        "policy": GaussianPolicy(env.observation_space, env.action_space, device),
+        "value": ValueModel(env.observation_space, env.action_space, device),
+    }
     return PPO(models=models, memory=memory, cfg=cfg, observation_space=env.observation_space, action_space=env.action_space, device=device)
 
 
 def make_sac_agent(env, memory, device):
+    cfg = deepcopy(SAC_DEFAULT_CONFIG)
+    cfg["batch_size"] = 256
+    cfg["random_timesteps"] = 0
+    cfg["learning_starts"] = 0
+    cfg["state_preprocessor"] = RunningStandardScaler
+    cfg["state_preprocessor_kwargs"] = {"size": flatdim(env.observation_space), "device": device}
+    return cfg
+
+
+def make_sac_agent_from_cfg(env, memory, device, cfg):
     models = {
         "policy": GaussianPolicy(env.observation_space, env.action_space, device),
         "critic_1": DeterministicCritic(env.observation_space, env.action_space, device),
@@ -160,16 +220,20 @@ def make_sac_agent(env, memory, device):
         "target_critic_1": DeterministicCritic(env.observation_space, env.action_space, device),
         "target_critic_2": DeterministicCritic(env.observation_space, env.action_space, device),
     }
-    cfg = deepcopy(SAC_DEFAULT_CONFIG)
+    return SAC(models=models, memory=memory, cfg=cfg, observation_space=env.observation_space, action_space=env.action_space, device=device)
+
+
+def make_td3_agent(env, memory, device):
+    cfg = deepcopy(TD3_DEFAULT_CONFIG)
     cfg["batch_size"] = 256
     cfg["random_timesteps"] = 0
     cfg["learning_starts"] = 0
     cfg["state_preprocessor"] = RunningStandardScaler
     cfg["state_preprocessor_kwargs"] = {"size": flatdim(env.observation_space), "device": device}
-    return SAC(models=models, memory=memory, cfg=cfg, observation_space=env.observation_space, action_space=env.action_space, device=device)
+    return cfg
 
 
-def make_td3_agent(env, memory, device):
+def make_td3_agent_from_cfg(env, memory, device, cfg):
     models = {
         "policy": DeterministicActor(env.observation_space, env.action_space, device),
         "target_policy": DeterministicActor(env.observation_space, env.action_space, device),
@@ -178,12 +242,6 @@ def make_td3_agent(env, memory, device):
         "target_critic_1": DeterministicCritic(env.observation_space, env.action_space, device),
         "target_critic_2": DeterministicCritic(env.observation_space, env.action_space, device),
     }
-    cfg = deepcopy(TD3_DEFAULT_CONFIG)
-    cfg["batch_size"] = 256
-    cfg["random_timesteps"] = 0
-    cfg["learning_starts"] = 0
-    cfg["state_preprocessor"] = RunningStandardScaler
-    cfg["state_preprocessor_kwargs"] = {"size": flatdim(env.observation_space), "device": device}
     return TD3(models=models, memory=memory, cfg=cfg, observation_space=env.observation_space, action_space=env.action_space, device=device)
 
 
@@ -206,6 +264,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lidar-horizontal-rays", type=int, default=180)
     parser.add_argument("--camera-width", type=int, default=84)
     parser.add_argument("--camera-height", type=int, default=84)
+    parser.add_argument("--tensorboard", action="store_true", help="Launch TensorBoard alongside training")
+    parser.add_argument("--tensorboard-host", type=str, default="127.0.0.1")
+    parser.add_argument("--tensorboard-port", type=int, default=6006)
+    parser.add_argument("--tensorboard-write-interval", type=str, default="auto")
+    parser.add_argument("--checkpoint-interval", type=str, default="auto")
+    parser.add_argument("--log-dir", type=str, default="runs/torch/crazyflie")
+    parser.add_argument("--run-name", type=str, default=None)
     return parser.parse_args()
 
 
@@ -222,6 +287,7 @@ def main() -> None:
     rl_device = args.rl_device if args.rl_device is not None else sim_device
     print("[train] Bootstrapping Isaac Lab...", flush=True)
     simulation_app = bootstrap_isaaclab(args)
+    tensorboard_process = None
 
     try:
         from crazyflie_lab.config import SensorSelectionCfg
@@ -245,12 +311,19 @@ def main() -> None:
         memory = RandomMemory(memory_size=args.memory_size, num_envs=args.num_envs, device=rl_device)
 
         print(f"[train] Creating {args.algorithm.upper()} agent...", flush=True)
+        log_dir = Path(args.log_dir)
         if args.algorithm == "ppo":
-            agent = make_ppo_agent(wrapped_env, memory, rl_device)
+            agent_cfg = configure_experiment_logging(make_ppo_agent(wrapped_env, memory, rl_device), args)
+            agent = make_ppo_agent_from_cfg(wrapped_env, memory, rl_device, agent_cfg)
         elif args.algorithm == "sac":
-            agent = make_sac_agent(wrapped_env, memory, rl_device)
+            agent_cfg = configure_experiment_logging(make_sac_agent(wrapped_env, memory, rl_device), args)
+            agent = make_sac_agent_from_cfg(wrapped_env, memory, rl_device, agent_cfg)
         else:
-            agent = make_td3_agent(wrapped_env, memory, rl_device)
+            agent_cfg = configure_experiment_logging(make_td3_agent(wrapped_env, memory, rl_device), args)
+            agent = make_td3_agent_from_cfg(wrapped_env, memory, rl_device, agent_cfg)
+
+        print(f"[train] skrl logs/checkpoints directory: {Path(args.log_dir)}", flush=True)
+        tensorboard_process = maybe_launch_tensorboard(args, log_dir)
 
         print(f"[train] Starting training for {args.timesteps} timesteps...", flush=True)
         trainer = SequentialTrainer(cfg={"timesteps": args.timesteps, "headless": getattr(args, "headless", True)}, env=wrapped_env, agents=agent)
@@ -261,6 +334,8 @@ def main() -> None:
         traceback.print_exc()
         raise
     finally:
+        if tensorboard_process is not None and tensorboard_process.poll() is None:
+            tensorboard_process.terminate()
         print("[train] Closing simulation app.", flush=True)
         simulation_app.close()
 
