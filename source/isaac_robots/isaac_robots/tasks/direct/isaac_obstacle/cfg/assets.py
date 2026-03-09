@@ -4,15 +4,13 @@ import os
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.assets import ArticulationCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 DEFAULT_CRAZYFLIE_USD = os.getenv(
     "CRAZYFLIE_USD_PATH",
     f"{ISAAC_NUCLEUS_DIR}/Robots/Bitcraze/Crazyflie/cf2x.usd",
 )
-
-DEFAULT_WAREHOUSE_USD = f"{ISAAC_NUCLEUS_DIR}/Environments/Digital_Twin_Warehouse/small_warehouse_digital_twin.usd"
 
 CRAZYFLIE_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",
@@ -50,13 +48,4 @@ CRAZYFLIE_CFG = ArticulationCfg(
             damping=0.0,
         ),
     },
-)
-
-WAREHOUSE_CFG = AssetBaseCfg(
-    prim_path="/World/envs/env_0/Warehouse",
-    spawn=sim_utils.UsdFileCfg(
-        usd_path=DEFAULT_WAREHOUSE_USD,
-        activate_contact_sensors=False,
-        copy_from_source=True,
-    ),
 )

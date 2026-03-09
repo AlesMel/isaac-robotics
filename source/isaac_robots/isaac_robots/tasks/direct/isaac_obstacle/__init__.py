@@ -13,11 +13,11 @@ from . import agents
 
 
 gym.register(
-    id="Isaac-Robots-Warehouse-Direct-v0",
-    entry_point=f"{__name__}.warehouse_env:WarehouseDirectEnv",
+    id="Isaac-Robots-ObstacleNav-Direct-v0",
+    entry_point=f"{__name__}.obstacle_nav_env:ObstacleNavDirectEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.warehouse_env_cfg:WarehouseEnvCfg",
+        "env_cfg_entry_point": f"{__name__}.obstacle_nav_env_cfg:ObstacleNavEnvCfg",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
     },
 )
