@@ -20,7 +20,7 @@ class ObservationTermSpec:
 @configclass
 class CrazyflieObservationCfg:
     sensor_selection: SensorSelectionCfg = SensorSelectionCfg()
-    base_state_shape: tuple[int, ...] = (17,)
+    base_state_shape: tuple[int, ...] = (20,)
     include_last_action: bool = True
     terms: Dict[str, ObservationTermSpec] = field(default_factory=dict)
 
