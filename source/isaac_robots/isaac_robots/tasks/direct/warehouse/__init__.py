@@ -13,11 +13,11 @@ from . import agents
 
 
 gym.register(
-    id="Isaac-Robots-CrazyFlie-Direct-v0",
-    entry_point=f"{__name__}.isaac_robots_env:CrazyflieDirectEnv",
+    id="Isaac-Robots-Warehouse-Direct-v0",
+    entry_point=f"{__name__}.warehouse_env:WarehouseDirectEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.isaac_robots_env_cfg:CrazyflieEnvCfg",
+        "env_cfg_entry_point": f"{__name__}.warehouse_env_cfg:WarehouseEnvCfg",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
     },
 )

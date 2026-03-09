@@ -1,23 +1,19 @@
 from __future__ import annotations
 
-import numpy as np
-import torch
 from gymnasium import spaces
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import Articulation, ArticulationCfg
-from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
-from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
-from isaaclab.utils.math import subtract_frame_transforms
 
-from .cfg import CRAZYFLIE_CFG
-from .cfg import SensorSelectionCfg
+from .cfg import CRAZYFLIE_CFG, SensorSelectionCfg, WAREHOUSE_CFG
+
 
 @configclass
-class CrazyflieEnvCfg(DirectRLEnvCfg):
+class WarehouseEnvCfg(DirectRLEnvCfg):
     episode_length_s: float = 10.0
     decimation: int = 2
     action_space: int = 4
@@ -36,26 +32,14 @@ class CrazyflieEnvCfg(DirectRLEnvCfg):
             restitution=0.0,
         ),
     )
-    terrain: TerrainImporterCfg = TerrainImporterCfg(
-        prim_path="/World/ground",
-        terrain_type="plane",
-        collision_group=-1,
-        physics_material=sim_utils.RigidBodyMaterialCfg(
-            friction_combine_mode="multiply",
-            restitution_combine_mode="multiply",
-            static_friction=1.0,
-            dynamic_friction=1.0,
-            restitution=0.0,
-        ),
-        debug_vis=False,
-    )
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=64,
-        env_spacing=4.0,
+        env_spacing=100.0,
         replicate_physics=True,
-        clone_in_fabric=True,
+        clone_in_fabric=False,
     )
     robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+    warehouse: AssetBaseCfg = WAREHOUSE_CFG
     sensor_selection: SensorSelectionCfg = SensorSelectionCfg()
 
     thrust_to_weight: float = 1.9
@@ -67,3 +51,8 @@ class CrazyflieEnvCfg(DirectRLEnvCfg):
 
     def __post_init__(self) -> None:
         self.sim.render_interval = self.decimation
+        warehouse_usd_path = getattr(self.warehouse.spawn, "usd_path", "")
+        if not warehouse_usd_path:
+            raise ValueError(
+                "WAREHOUSE_USD_PATH is not set. Point it to a valid warehouse USD before loading the task."
+            )

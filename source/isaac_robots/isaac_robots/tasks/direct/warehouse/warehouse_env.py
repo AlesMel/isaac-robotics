@@ -5,29 +5,20 @@ import torch
 from gymnasium import spaces
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import Articulation, ArticulationCfg
-from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
-from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sim import SimulationCfg
-
-from isaaclab.terrains import TerrainImporterCfg
+from isaaclab.assets import Articulation
+from isaaclab.envs import DirectRLEnv
 from isaaclab.markers import VisualizationMarkers
-
-from isaaclab.utils import configclass
 from isaaclab.utils.math import subtract_frame_transforms
 
 from isaaclab.markers import CUBOID_MARKER_CFG  # isort: skip
 
-from .cfg import CRAZYFLIE_CFG
-from .cfg import SensorSelectionCfg
-
-from .isaac_robots_env_cfg import CrazyflieEnvCfg
+from .warehouse_env_cfg import WarehouseEnvCfg
 
 
-class CrazyflieDirectEnv(DirectRLEnv):
-    cfg: CrazyflieEnvCfg
+class WarehouseDirectEnv(DirectRLEnv):
+    cfg: WarehouseEnvCfg
 
-    def __init__(self, cfg: CrazyflieEnvCfg, render_mode: str | None = None, **kwargs) -> None:
+    def __init__(self, cfg: WarehouseEnvCfg, render_mode: str | None = None, **kwargs) -> None:
         super().__init__(cfg=cfg, render_mode=render_mode, **kwargs)
 
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(12,), dtype=np.float32)
@@ -52,13 +43,16 @@ class CrazyflieDirectEnv(DirectRLEnv):
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
 
-        self.cfg.terrain.num_envs = self.scene.cfg.num_envs
-        self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
-        self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
+        warehouse_cfg = self.cfg.warehouse
+        warehouse_cfg.spawn.func(warehouse_cfg.prim_path, warehouse_cfg.spawn)
 
-        self.scene.clone_environments(copy_from_source=False)
+        self.scene.clone_environments(copy_from_source=True)
         if self.device == "cpu":
-            self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
+            self.scene.filter_collisions(global_prim_paths=[])
+
+        self._env_origins = getattr(self.scene, "env_origins", None)
+        if self._env_origins is None:
+            raise RuntimeError("Interactive scene did not provide environment origins for the warehouse task.")
 
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
@@ -146,33 +140,29 @@ class CrazyflieDirectEnv(DirectRLEnv):
         self._moment[env_ids] = 0.0
 
         self._desired_pos_w[env_ids, :2] = torch.zeros_like(self._desired_pos_w[env_ids, :2]).uniform_(-2.0, 2.0)
-        self._desired_pos_w[env_ids, :2] += self._terrain.env_origins[env_ids, :2]
+        self._desired_pos_w[env_ids, :2] += self._env_origins[env_ids, :2]
         self._desired_pos_w[env_ids, 2] = torch.zeros_like(self._desired_pos_w[env_ids, 2]).uniform_(0.5, 1.5)
 
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
         default_root_state = self._robot.data.default_root_state[env_ids].clone()
-        default_root_state[:, :3] += self._terrain.env_origins[env_ids]
+        default_root_state[:, :3] += self._env_origins[env_ids]
 
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
 
     def _set_debug_vis_impl(self, debug_vis: bool):
-        # create markers if necessary for the first time
         if debug_vis:
             if not hasattr(self, "goal_pos_visualizer"):
                 marker_cfg = CUBOID_MARKER_CFG.copy()
                 marker_cfg.markers["cuboid"].size = (0.05, 0.05, 0.05)
-                # -- goal pose
                 marker_cfg.prim_path = "/Visuals/Command/goal_position"
                 self.goal_pos_visualizer = VisualizationMarkers(marker_cfg)
-            # set their visibility to true
             self.goal_pos_visualizer.set_visibility(True)
         else:
             if hasattr(self, "goal_pos_visualizer"):
                 self.goal_pos_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
-        # update the markers
         self.goal_pos_visualizer.visualize(self._desired_pos_w)
