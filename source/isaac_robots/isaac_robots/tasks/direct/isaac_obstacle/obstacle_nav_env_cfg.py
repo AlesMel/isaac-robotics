@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
@@ -45,31 +45,31 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
             restitution=0.0,
         ),
     )
-    # terrain: TerrainImporterCfg = TerrainImporterCfg(
-    #     prim_path="/World/ground",
-    #     terrain_type="plane",
-    #     collision_group=-1,
-    #     physics_material=sim_utils.RigidBodyMaterialCfg(
-    #         friction_combine_mode="multiply",
-    #         restitution_combine_mode="multiply",
-    #         static_friction=1.0,
-    #         dynamic_friction=1.0,
-    #         restitution=0.0,
-    #     ),
-    #     debug_vis=False,
-    # )
+    terrain: TerrainImporterCfg = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="plane",
+        collision_group=-1,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+            restitution=0.0,
+        ),
+        debug_vis=False,
+    )
     robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+    warehouse: AssetBaseCfg = AssetBaseCfg(
+        prim_path="/World/envs/env_.*/Warehouse",
+        spawn=UsdFileCfg(
+            usd_path=os.path.join(os.path.dirname(__file__), "warehouse.usd"),
+        ),
+    )
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=4096,
-        env_spacing=5.0,
+        env_spacing=20.0,
         replicate_physics=True,
         clone_in_fabric=False,
-    )
-
-    terrain = TerrainImporterCfg(
-        prim_path="/World/ground",
-        terrain_type="usd",
-        usd_path=os.path.join(os.path.dirname(__file__), "warehouse.usd"),
     )
     sensor_selection: SensorSelectionCfg = SensorSelectionCfg(enable_lidar=True, enable_camera=False)
     

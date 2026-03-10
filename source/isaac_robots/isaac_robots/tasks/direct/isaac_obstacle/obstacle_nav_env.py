@@ -57,11 +57,24 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self._waypoint_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._waypoint_markers = VisualizationMarkers(self.cfg.waypoint_markers)
 
+        # Stuck detection: terminate if no progress toward goal for too long
+        self._best_distance_to_goal = torch.full((self.num_envs,), float("inf"), device=self.device)
+        self._steps_without_progress = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._stuck_timeout_steps = int(5.0 / (self.cfg.decimation * self.cfg.sim.dt))  # 5 seconds
+
         self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self) -> None:
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
+
+        warehouse_prim_path = self.cfg.warehouse.prim_path.replace("env_.*", "env_0")
+        self.cfg.warehouse.spawn.func(
+            warehouse_prim_path,
+            self.cfg.warehouse.spawn,
+            translation=self.cfg.warehouse.init_state.pos,
+            orientation=self.cfg.warehouse.init_state.rot,
+        )
 
         if self.cfg.lidar is not None:
             self._lidar = self.cfg.lidar.class_type(self.cfg.lidar)
@@ -153,7 +166,14 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         too_low = self._robot.data.root_pos_w[:, 2] < 0.1
         too_high = self._robot.data.root_pos_w[:, 2] > 2.5
 
-        died = too_low | too_high
+        # Stuck detection: track progress toward current goal
+        distance_to_goal = torch.linalg.norm(self._desired_pos_w - self._robot.data.root_pos_w, dim=1)
+        improved = distance_to_goal < self._best_distance_to_goal - 0.05
+        self._best_distance_to_goal = torch.minimum(self._best_distance_to_goal, distance_to_goal)
+        self._steps_without_progress = torch.where(improved, torch.zeros_like(self._steps_without_progress), self._steps_without_progress + 1)
+        stuck = self._steps_without_progress >= self._stuck_timeout_steps
+
+        died = too_low | too_high | stuck
         return died, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None) -> None:
@@ -186,6 +206,8 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self._actions[env_ids] = 0.0
         self._thrust[env_ids] = 0.0
         self._moment[env_ids] = 0.0
+        self._best_distance_to_goal[env_ids] = float("inf")
+        self._steps_without_progress[env_ids] = 0
 
         self._waypoints_w[env_ids] = self._env_origins[env_ids].unsqueeze(1) + self._goal_offsets.unsqueeze(0)
         self._waypoint_idx[env_ids] = 0

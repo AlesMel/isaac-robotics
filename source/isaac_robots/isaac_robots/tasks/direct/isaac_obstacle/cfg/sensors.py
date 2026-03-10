@@ -14,18 +14,20 @@ LIDAR_CFG = MultiMeshRayCasterCfg(
     offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
     mesh_prim_paths=[
         "/World/ground",
+        MultiMeshRayCasterCfg.RaycastTargetCfg(prim_expr="/World/envs/env_.*/Warehouse"),
     ],
     debug_vis=True,
     max_distance=100,
 )
 
 MULTI_RANGER_CFG = MultiMeshRayCasterCfg(
-    prim_path="{ENV_REGEX_NS}/Robot/body", 
+    prim_path="{ENV_REGEX_NS}/Robot/body",
     offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.02)), # Mounted on top
     pattern_cfg=CrazyflieToFPatternCfg(),
     max_distance=4.0, # Multi-ranger limit is 4 meters
     mesh_prim_paths=[
         "/World/ground",
+        MultiMeshRayCasterCfg.RaycastTargetCfg(prim_expr="/World/envs/env_.*/Warehouse"),
     ],
     debug_vis=True,
 )
