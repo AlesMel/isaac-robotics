@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
-
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg
+from isaaclab.assets import ArticulationCfg, RigidObjectCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
@@ -12,7 +10,6 @@ from isaaclab.utils import configclass
 from isaaclab.envs import ViewerCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 from isaaclab.markers import VisualizationMarkersCfg
-from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 
 from .cfg import MULTI_RANGER_CFG, CRAZYFLIE_CFG, SensorSelectionCfg, LIDAR_CFG
 
@@ -45,19 +42,19 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
             restitution=0.0,
         ),
     )
-    # terrain: TerrainImporterCfg = TerrainImporterCfg(
-    #     prim_path="/World/ground",
-    #     terrain_type="plane",
-    #     collision_group=-1,
-    #     physics_material=sim_utils.RigidBodyMaterialCfg(
-    #         friction_combine_mode="multiply",
-    #         restitution_combine_mode="multiply",
-    #         static_friction=1.0,
-    #         dynamic_friction=1.0,
-    #         restitution=0.0,
-    #     ),
-    #     debug_vis=False,
-    # )
+    terrain: TerrainImporterCfg = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="plane",
+        collision_group=-1,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+            restitution=0.0,
+        ),
+        debug_vis=False,
+    )
     robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=4096,
@@ -66,10 +63,24 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
         clone_in_fabric=False,
     )
 
-    terrain = TerrainImporterCfg(
-        prim_path="/World/ground",
-        terrain_type="usd",
-        usd_path=os.path.join(os.path.dirname(__file__), "warehouse.usd"),
+    obstacle_0: RigidObjectCfg = RigidObjectCfg(
+        prim_path="/World/envs/env_.*/Obstacle_0",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.3, 0.3, 1.0),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(1.5, 0.0, 0.5)),
+    )
+
+    obstacle_1: RigidObjectCfg = RigidObjectCfg(
+        prim_path="/World/envs/env_.*/Obstacle_1",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.3, 0.3, 1.0),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(-1.5, 0.0, 0.5)),
     )
     sensor_selection: SensorSelectionCfg = SensorSelectionCfg(enable_lidar=True, enable_camera=False)
     
@@ -91,16 +102,26 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
     lidar = MULTI_RANGER_CFG.replace(
         prim_path="/World/envs/env_.*/Robot/body",
     )
+    # lidar.mesh_prim_paths = ["/World/envs/env_.*/Obstacle_0", "/World/envs/env_.*/Obstacle_1"]
+
     thrust_to_weight: float = 1.9
     moment_scale: float = 0.01
     lin_vel_reward_scale: float = -0.05
     ang_vel_reward_scale: float = -0.01
     distance_to_goal_reward_scale: float = 15.0
+    obstacle_proximity_reward_scale: float = -5.0
+    collision_penalty: float = -15.0
     goal_reached_bonus: float = 15.0
+    collision_margin: float = 0.15
     goal_reached_threshold: float = 0.2
+    obstacle_safety_distance: float = 1.0
+    obstacle_separation_range: tuple[float, float] = (1.5, 4.0)  # distance between obstacles
     randomize_initial_episode_length: bool = True
-    goal_z_range: tuple[float, float] = (0.4, 1.0)
+    goal_z_range: tuple[float, float] = (0.5, 0.5)
     goal_min_distance_from_spawn: float = 2.0
+    goal_clearance_margin: float = 0.75
+    layout_half_extent: float = 4.5
+    max_sampling_attempts: int = 100
 
     def __post_init__(self) -> None:
         self.sim.render_interval = self.decimation
