@@ -1,18 +1,71 @@
 from __future__ import annotations
 
-from isaaclab.sensors.ray_caster import MultiMeshRayCasterCfg, patterns
-from isaaclab.utils import configclass
+import math
 
+from isaaclab.sensors import MultiMeshRayCasterCfg, RayCasterCfg, patterns
+from isaaclab.utils import configclass
+from .tof_pattern import CrazyflieToFPatternCfg
+
+LIDAR_CFG = MultiMeshRayCasterCfg(
+    attach_yaw_only=True,
+    pattern_cfg=patterns.LidarPatternCfg(
+        channels=16, vertical_fov_range=(-15.0, 15.0), horizontal_fov_range=(-180.0, 180.0), horizontal_res=1.0
+    ),
+    offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
+    mesh_prim_paths=[
+        "/World/ground",
+        MultiMeshRayCasterCfg.RaycastTargetCfg(prim_expr="/World/envs/env_.*/Obstacle_.*")
+    ],
+    debug_vis=True,
+    max_distance=100,
+)
+
+MULTI_RANGER_CFG = MultiMeshRayCasterCfg(
+    prim_path="{ENV_REGEX_NS}/Robot/body", 
+    offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.02)), # Mounted on top
+    pattern_cfg=CrazyflieToFPatternCfg(),
+    max_distance=4.0, # Multi-ranger limit is 4 meters
+    mesh_prim_paths=[
+        "/World/ground",
+        MultiMeshRayCasterCfg.RaycastTargetCfg(prim_expr="/World/envs/env_.*/Obstacle_.*")
+    ],
+    debug_vis=True,
+)
+
+def _compute_ray_count(cfg: patterns.PatternBaseCfg) -> tuple[int, int]:
+    """Compute (channels, rays) gracefully for any pattern."""
+    
+    # 1. Handle standard spinning LiDARs
+    if isinstance(cfg, patterns.LidarPatternCfg):
+        h_fov = cfg.horizontal_fov_range
+        h_rays = math.ceil((h_fov[1] - h_fov[0]) / cfg.horizontal_res) + 1
+        if abs(abs(h_fov[0] - h_fov[1]) - 360.0) < 1e-6:
+            h_rays -= 1
+        return cfg.channels, h_rays
+        
+    # 2. Handle our custom Crazyflie ToF config
+    elif isinstance(cfg, CrazyflieToFPatternCfg):
+        # 1 "channel" (row), 6 total rays
+        return 1, 6
+        
+    # 3. Fallback for other custom patterns
+    else:
+        # If it's a generic custom pattern, you might have to hardcode 
+        # or evaluate the function to get the shape.
+        starts, directions = cfg.func(cfg, device="cpu")
+        return 1, directions.shape[0]
+
+_LIDAR_CHANNELS, _LIDAR_H_RAYS = _compute_ray_count(MULTI_RANGER_CFG.pattern_cfg)
 
 @configclass
 class SensorSelectionCfg:
     enable_lidar: bool = True
     enable_camera: bool = False
     lidar_debug_vis: bool = True
-    lidar_channels: int = 16
-    lidar_horizontal_rays: int = 180
+    lidar_channels: int = _LIDAR_CHANNELS
+    lidar_horizontal_rays: int = _LIDAR_H_RAYS
     lidar_vertical_fov_deg: tuple[float, float] = (-15.0, 15.0)
-    lidar_max_distance_m: float = 10.0
+    lidar_max_distance_m: float = 4.0
     camera_width: int = 84
     camera_height: int = 84
     camera_data_types: tuple[str, ...] = ("rgb", "depth")
@@ -24,32 +77,3 @@ class SensorSelectionCfg:
     @property
     def lidar_flat_dim(self) -> int:
         return self.lidar_channels * self.lidar_horizontal_rays
-
-
-def build_lidar_cfg(sensor_cfg: SensorSelectionCfg) -> MultiMeshRayCasterCfg | None:
-    if not sensor_cfg.enable_lidar:
-        return None
-
-    horizontal_resolution = 360.0 / max(1, sensor_cfg.lidar_horizontal_rays)
-
-    return MultiMeshRayCasterCfg(
-        prim_path="/World/envs/env_.*/Robot/body",
-        update_period=0.0,
-        offset=MultiMeshRayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.05)),
-        ray_alignment="base",
-        pattern_cfg=patterns.LidarPatternCfg(
-            channels=sensor_cfg.lidar_channels,
-            horizontal_res=horizontal_resolution,
-            vertical_fov_range=list(sensor_cfg.lidar_vertical_fov_deg),
-            horizontal_fov_range=[-180.0, 180.0],
-        ),
-        debug_vis=sensor_cfg.lidar_debug_vis,
-        mesh_prim_paths=[
-            "/World/ground",
-            MultiMeshRayCasterCfg.RaycastTargetCfg(
-                prim_expr="/World/envs/env_.*/Obstacle_.*",
-                track_mesh_transforms=True,
-            ),
-        ],
-        max_distance=sensor_cfg.lidar_max_distance_m,
-    )

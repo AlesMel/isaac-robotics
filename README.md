@@ -1,115 +1,135 @@
-# Crazyflie Isaac Lab
+# Template for Isaac Lab Projects
 
-Modular Isaac Lab environment scaffold for the Bitcraze Crazyflie with config-driven optional sensors.
+## Overview
 
-## Install
+This project/repository serves as a template for building projects or extensions based on Isaac Lab.
+It allows you to develop in an isolated environment, outside of the core Isaac Lab repository.
 
-Install this repository into the same Python environment used by Isaac Lab / Isaac Sim.
+**Key Features:**
 
-Editable install of the local package:
+- `Isolation` Work outside the core Isaac Lab repository, ensuring that your development efforts remain self-contained.
+- `Flexibility` This template is set up to allow your code to be run as an extension in Omniverse.
 
-```bash
-pip install -e .
-```
+**Keywords:** extension, template, isaaclab
 
-Optional training dependencies:
+## Installation
 
-```bash
-pip install -e .[train]
-```
+- Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
+  We recommend using the conda or uv installation as it simplifies calling Python scripts from the terminal.
 
-## Two-Repository Workflow
+- Clone or copy this project/repository separately from the Isaac Lab installation (i.e. outside the `IsaacLab` directory):
 
-This project is designed to live in its own repository while Isaac Lab lives in a separate checkout.
+- Using a python interpreter that has Isaac Lab installed, install the library in editable mode using:
 
-Example layout:
+    ```bash
+    # use 'PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
+    python -m pip install -e source/isaac_robots
 
-```text
-/home/user/IsaacLab
-/home/user/isaac-robotics
-```
+- Verify that the extension is correctly installed by:
 
-Recommended flow:
+    - Listing the available tasks:
 
-1. Activate or use the Python environment that Isaac Lab uses.
-2. Install this repository into that same environment.
-3. Launch `train.py` through Isaac Lab's launcher so Omni / Isaac Sim modules are available.
+        Note: It the task name changes, it may be necessary to update the search pattern `"Template-"`
+        (in the `scripts/list_envs.py` file) so that it can be listed.
 
-### Option A: Editable install + launcher
+        ```bash
+        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
+        python scripts/list_envs.py
+        ```
 
-From this repository:
+    - Running a task:
 
-```bash
-cd /path/to/isaac-robotics
-python -m pip install -e .
-python -m pip install -e .[train]
-```
+        ```bash
+        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
+        python scripts/<RL_LIBRARY>/train.py --task=<TASK_NAME>
+        ```
 
-Then launch through the Isaac Lab checkout:
+    - Running a task with dummy agents:
 
-```bash
-cd /path/to/IsaacLab
-./isaaclab.sh -p /path/to/isaac-robotics/train.py --headless
-```
+        These include dummy agents that output zero or random agents. They are useful to ensure that the environments are configured correctly.
 
-### Option B: Use the included launcher wrapper
+        - Zero-action agent
 
-This repository ships with `run.sh`, which forwards execution to an external Isaac Lab checkout.
+            ```bash
+            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
+            python scripts/zero_agent.py --task=<TASK_NAME>
+            ```
+        - Random-action agent
 
-```bash
-cd /path/to/isaac-robotics
-./run.sh /path/to/IsaacLab --headless
-```
+            ```bash
+            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
+            python scripts/random_agent.py --task=<TASK_NAME>
+            ```
 
-Or set the path once:
+### Set up IDE (Optional)
 
-```bash
-export ISAACLAB_DIR=/path/to/IsaacLab
-./run.sh --headless --algorithm ppo --enable-lidar
-```
+To setup the IDE, please follow these instructions:
 
-`run.sh` automatically:
+- Run VSCode Tasks, by pressing `Ctrl+Shift+P`, selecting `Tasks: Run Task` and running the `setup_python_env` in the drop down menu.
+  When running this task, you will be prompted to add the absolute path to your Isaac Sim installation.
 
-- Locates `isaaclab.sh` or `isaac-sim.sh`
-- Adds this repo's `src` directory to `PYTHONPATH`
-- Launches `train.py` through Isaac Lab so `omni` imports work
+If everything executes correctly, it should create a file .python.env in the `.vscode` directory.
+The file contains the python paths to all the extensions provided by Isaac Sim and Omniverse.
+This helps in indexing all the python modules for intelligent suggestions while writing code.
 
-## Training Examples
+### Setup as Omniverse Extension (Optional)
 
-Headless PPO with state only:
+We provide an example UI extension that will load upon enabling your extension defined in `source/isaac_robots/isaac_robots/ui_extension_example.py`.
 
-```bash
-./run.sh /path/to/IsaacLab --headless --algorithm ppo
-```
+To enable your extension, follow these steps:
 
-PPO with LiDAR enabled:
+1. **Add the search path of this project/repository** to the extension manager:
+    - Navigate to the extension manager using `Window` -> `Extensions`.
+    - Click on the **Hamburger Icon**, then go to `Settings`.
+    - In the `Extension Search Paths`, enter the absolute path to the `source` directory of this project/repository.
+    - If not already present, in the `Extension Search Paths`, enter the path that leads to Isaac Lab's extension directory directory (`IsaacLab/source`)
+    - Click on the **Hamburger Icon**, then click `Refresh`.
 
-```bash
-./run.sh /path/to/IsaacLab --headless --algorithm ppo --enable-lidar
-```
+2. **Search and enable your extension**:
+    - Find your extension under the `Third Party` category.
+    - Toggle it to enable your extension.
 
-SAC with camera enabled:
+## Code formatting
 
-```bash
-./run.sh /path/to/IsaacLab --headless --algorithm sac --enable-camera
-```
-
-TD3 with both sensors enabled:
+We have a pre-commit template to automatically format your code.
+To install pre-commit:
 
 ```bash
-./run.sh /path/to/IsaacLab --headless --algorithm td3 --enable-lidar --enable-camera
+pip install pre-commit
 ```
 
-## Runtime Notes
+Then you can run pre-commit with:
 
-- Do not run `python train.py` directly unless your Python process was started by Isaac Lab / Isaac Sim.
-- The `train.py` script bootstraps Isaac Lab with `AppLauncher`, but the launcher itself must still come from the Isaac Lab environment.
-- If your Nucleus paths differ from the defaults, set `ISAAC_NUCLEUS_DIR` or `CRAZYFLIE_USD_PATH` before launch.
-- Observation size is computed dynamically from `SensorSelectionCfg`, so skrl model input dimensions change automatically with enabled sensors.
+```bash
+pre-commit run --all-files
+```
 
-## Notes
+## Troubleshooting
 
-- Isaac Lab / Isaac Sim are expected to be installed separately in the target environment.
-- Sensor activation is controlled through `SensorSelectionCfg` in `src/crazyflie_lab/config/sensors.py`.
-- Training entrypoint: `train.py`
-- Convenience launcher: `run.sh`
+### Pylance Missing Indexing of Extensions
+
+In some VsCode versions, the indexing of part of the extensions is missing.
+In this case, add the path to your extension in `.vscode/settings.json` under the key `"python.analysis.extraPaths"`.
+
+```json
+{
+    "python.analysis.extraPaths": [
+        "<path-to-ext-repo>/source/isaac_robots"
+    ]
+}
+```
+
+### Pylance Crash
+
+If you encounter a crash in `pylance`, it is probable that too many files are indexed and you run out of memory.
+A possible solution is to exclude some of omniverse packages that are not used in your project.
+To do so, modify `.vscode/settings.json` and comment out packages under the key `"python.analysis.extraPaths"`
+Some examples of packages that can likely be excluded are:
+
+```json
+"<path-to-isaac-sim>/extscache/omni.anim.*"         // Animation packages
+"<path-to-isaac-sim>/extscache/omni.kit.*"          // Kit UI tools
+"<path-to-isaac-sim>/extscache/omni.graph.*"        // Graph UI tools
+"<path-to-isaac-sim>/extscache/omni.services.*"     // Services tools
+...
+```

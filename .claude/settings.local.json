@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from isaaclab.envs import ViewerCfg; import inspect; print\\(inspect.getfile\\(ViewerCfg\\)\\); print\\(inspect.getsource\\(ViewerCfg\\)\\)\")",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:isaac-sim.github.io)",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/isaac-sim/IsaacLab/main/source/isaaclab_tasks/isaaclab_tasks/direct/quadcopter/quadcopter_env.py\")",
+      "WebFetch(domain:raw.githubusercontent.com)"
+    ]
+  }
+}

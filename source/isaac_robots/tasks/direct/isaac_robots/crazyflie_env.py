@@ -9,17 +9,12 @@ from isaaclab.assets import Articulation, ArticulationCfg
 from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
-
 from isaaclab.terrains import TerrainImporterCfg
-from isaaclab.markers import VisualizationMarkers
-
 from isaaclab.utils import configclass
 from isaaclab.utils.math import subtract_frame_transforms
 
-from isaaclab.markers import CUBOID_MARKER_CFG  # isort: skip
-
-from .cfg import CRAZYFLIE_CFG
-from .cfg import SensorSelectionCfg
+from isaac_robots.cfg.assets import CRAZYFLIE_CFG
+from isaac_robots.cfg.sensors import SensorSelectionCfg
 
 from .isaac_robots_env_cfg import CrazyflieEnvCfg
 
@@ -37,22 +32,15 @@ class CrazyflieDirectEnv(DirectRLEnv):
         self._thrust = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._moment = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
-        
         self._episode_sums = {
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-            for key in [
-                "lin_vel", 
-                "ang_vel", 
-                "distance_to_goal"
-            ]
+            for key in ["lin_vel", "ang_vel", "distance_to_goal"]
         }
 
         self._body_id = self._robot.find_bodies("body")[0]
         self._robot_mass = self._robot.root_physx_view.get_masses()[0].sum()
         self._gravity_magnitude = torch.tensor(self.sim.cfg.gravity, device=self.device).norm()
         self._robot_weight = (self._robot_mass * self._gravity_magnitude).item()
-       
-        self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self) -> None:
         self._robot = Articulation(self.cfg.robot)
@@ -163,22 +151,3 @@ class CrazyflieDirectEnv(DirectRLEnv):
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
-
-    def _set_debug_vis_impl(self, debug_vis: bool):
-        # create markers if necessary for the first time
-        if debug_vis:
-            if not hasattr(self, "goal_pos_visualizer"):
-                marker_cfg = CUBOID_MARKER_CFG.copy()
-                marker_cfg.markers["cuboid"].size = (0.05, 0.05, 0.05)
-                # -- goal pose
-                marker_cfg.prim_path = "/Visuals/Command/goal_position"
-                self.goal_pos_visualizer = VisualizationMarkers(marker_cfg)
-            # set their visibility to true
-            self.goal_pos_visualizer.set_visibility(True)
-        else:
-            if hasattr(self, "goal_pos_visualizer"):
-                self.goal_pos_visualizer.set_visibility(False)
-
-    def _debug_vis_callback(self, event):
-        # update the markers
-        self.goal_pos_visualizer.visualize(self._desired_pos_w)

@@ -6,15 +6,15 @@ from gymnasium import spaces
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, ArticulationCfg
-from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg, ViewerCfg
+from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.math import subtract_frame_transforms
 
-from .cfg import CRAZYFLIE_CFG
-from .cfg import SensorSelectionCfg
+from isaac_robots.cfg.assets import CRAZYFLIE_CFG
+from isaac_robots.cfg.sensors import SensorSelectionCfg
 
 @configclass
 class CrazyflieEnvCfg(DirectRLEnvCfg):
@@ -23,15 +23,6 @@ class CrazyflieEnvCfg(DirectRLEnvCfg):
     action_space: int = 4
     observation_space: int = 12
     state_space: int = 0
-    debug_vis = True
-
-    viewer: ViewerCfg = ViewerCfg(
-        eye=(5.0, 5.0, 5.0),
-        lookat=(0.0, 0.0, 0.5),
-        origin_type="env",
-        env_index=0,
-        asset_name=None,
-    )
 
     sim: SimulationCfg = SimulationCfg(
         dt=1 / 100,

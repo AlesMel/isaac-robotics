@@ -7,23 +7,22 @@ import torch
 from gymnasium import spaces
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import Articulation, RigidObjectCollection
+from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import DirectRLEnv
 from isaaclab.markers import VisualizationMarkers
 from isaaclab.utils.math import subtract_frame_transforms
 
 from isaaclab.markers import CUBOID_MARKER_CFG  # isort: skip
 
-from .cfg import build_obstacle_collection_cfg, build_source_obstacle_cfgs, get_obstacle_dim_tensors
 from .obstacle_nav_env_cfg import ObstacleNavEnvCfg
+import logging
 
+logger = logging.getLogger(__name__)
 
 class ObstacleNavDirectEnv(DirectRLEnv):
     cfg: ObstacleNavEnvCfg
 
     def __init__(self, cfg: ObstacleNavEnvCfg, render_mode: str | None = None, **kwargs) -> None:
-        self._obstacle_collection_cfg = build_obstacle_collection_cfg(cfg.obstacle_cfg.count)
-        self._source_obstacle_cfgs = build_source_obstacle_cfgs(cfg.obstacle_cfg.count)
         super().__init__(cfg=cfg, render_mode=render_mode, **kwargs)
 
         self.observation_space = spaces.Box(
@@ -43,10 +42,11 @@ class ObstacleNavDirectEnv(DirectRLEnv):
             for key in ["lin_vel", "ang_vel", "distance_to_goal",
                         "obstacle_proximity", "collision", "goal_reached"]
         }
-        obstacle_radii, obstacle_heights = get_obstacle_dim_tensors(self.cfg.obstacle_cfg.count, self.device)
-        self._obstacle_radii = obstacle_radii
-        self._obstacle_heights = obstacle_heights
-        self._obstacle_positions_w = torch.zeros(self.num_envs, self.cfg.obstacle_cfg.count, 3, device=self.device)
+        # Bounding radius in XY for a 0.3x0.3 cuboid
+        obstacle_radius = 0.5 * math.sqrt(0.3**2 + 0.3**2)
+        self._obstacle_radii = torch.tensor([obstacle_radius, obstacle_radius], dtype=torch.float, device=self.device)
+        self._obstacle_heights = torch.tensor([1.0, 1.0], dtype=torch.float, device=self.device)
+        self._obstacle_positions_w = torch.zeros(self.num_envs, 2, 3, device=self.device)
 
         self._body_id = self._robot.find_bodies("body")[0]
         self._robot_mass = self._robot.root_physx_view.get_masses()[0].sum()
@@ -58,17 +58,27 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
 
-        self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
-        for obstacle_cfg in self._source_obstacle_cfgs.values():
-            obstacle_cfg.spawn.func(obstacle_cfg.prim_path, obstacle_cfg.spawn)
+        self._obstacle_0 = RigidObject(self.cfg.obstacle_0)
+        self._obstacle_1 = RigidObject(self.cfg.obstacle_1)
+        self.scene.rigid_objects["obstacle_0"] = self._obstacle_0
+        self.scene.rigid_objects["obstacle_1"] = self._obstacle_1
 
+        if self.cfg.lidar is not None:
+            self._lidar = self.cfg.lidar.class_type(self.cfg.lidar)
+            self.scene.sensors["lidar"] = self._lidar
+        else:
+            self._lidar = None
+
+        self.cfg.terrain.num_envs = self.scene.cfg.num_envs
+        self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
+        self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
+        self._env_origins = self._terrain.env_origins
+        
         self.scene.clone_environments(copy_from_source=False)
         if self.device == "cpu":
             self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
 
-        self._obstacles = RigidObjectCollection(self._obstacle_collection_cfg)
-        self._env_origins = self._terrain.env_origins
-        self._lidar = self.cfg.lidar.class_type(self.cfg.lidar) if self.cfg.lidar is not None else None
+        # self._env_origins = self._terrain.env_origins
 
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
@@ -173,6 +183,13 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self._robot._ALL_INDICES
 
+        self._robot.reset(env_ids)
+        super()._reset_idx(env_ids)
+
+        if len(env_ids) == self.num_envs:
+            # Spread out the resets to avoid spikes in training when many environments reset at a similar time
+            self.episode_length_buf[:] = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
+
         final_distance_to_goal = torch.linalg.norm(
             self._desired_pos_w[env_ids] - self._robot.data.root_pos_w[env_ids], dim=1
         ).mean()
@@ -189,18 +206,12 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self.extras["log"]["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
         self.extras["log"]["Metrics/final_distance_to_goal"] = final_distance_to_goal.item()
 
-        self._robot.reset(env_ids)
-        self._obstacles.reset(env_ids=env_ids)
-        super()._reset_idx(env_ids)
-
-        if len(env_ids) == self.num_envs and self.cfg.randomize_initial_episode_length:
-            self.episode_length_buf = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
-
         self._actions[env_ids] = 0.0
         self._thrust[env_ids] = 0.0
         self._moment[env_ids] = 0.0
 
-        self._randomize_obstacles(env_ids)
+        self._obstacle_positions_w[env_ids, 0, :] = self._obstacle_0.data.root_pos_w[env_ids]
+        self._obstacle_positions_w[env_ids, 1, :] = self._obstacle_1.data.root_pos_w[env_ids]
         self._sample_goals(env_ids)
 
         joint_pos = self._robot.data.default_joint_pos[env_ids]
@@ -212,40 +223,15 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
 
-        if self._lidar is not None:
-            self._lidar.reset(env_ids.tolist())
-
-    def _randomize_obstacles(self, env_ids: torch.Tensor) -> None:
-        object_state = self._obstacles.data.default_object_state[env_ids].clone()
-        object_state[..., 7:] = 0.0
-
-        for batch_idx, env_id in enumerate(env_ids.tolist()):
-            origin_xy = self._env_origins[env_id, :2]
-            placed_xy: list[torch.Tensor] = []
-            placed_radii: list[float] = []
-            for obstacle_idx in range(self.cfg.obstacle_cfg.count):
-                radius = float(self._obstacle_radii[obstacle_idx].item())
-                xy = self._sample_free_xy(origin_xy, placed_xy, placed_radii, radius)
-                yaw = torch.rand(1, device=self.device).item() * (2.0 * math.pi)
-                quat = self._quat_from_yaw(yaw)
-                z = self._obstacle_heights[obstacle_idx].item() * 0.5
-
-                object_state[batch_idx, obstacle_idx, :3] = torch.tensor((xy[0], xy[1], z), device=self.device)
-                object_state[batch_idx, obstacle_idx, 3:7] = quat
-                self._obstacle_positions_w[env_id, obstacle_idx] = object_state[batch_idx, obstacle_idx, :3]
-                placed_xy.append(xy)
-                placed_radii.append(radius)
-
-        self._obstacles.write_object_state_to_sim(object_state, env_ids=env_ids)
-
     def _sample_goals(self, env_ids: torch.Tensor) -> None:
         z_min, z_max = self.cfg.goal_z_range
+        half_extent = self.cfg.layout_half_extent
         for env_id in env_ids.tolist():
             origin_xy = self._env_origins[env_id, :2]
             obstacle_xy = self._obstacle_positions_w[env_id, :, :2]
             goal_xy = None
-            for _ in range(self.cfg.obstacle_cfg.max_sampling_attempts):
-                sample = self._uniform_xy(origin_xy)
+            for _ in range(self.cfg.max_sampling_attempts):
+                sample = origin_xy + torch.empty(2, device=self.device).uniform_(-half_extent, half_extent)
                 obstacle_dist = torch.linalg.norm(obstacle_xy - sample.unsqueeze(0), dim=-1)
                 obstacle_clearance = self._obstacle_radii + self.cfg.goal_clearance_margin
                 far_from_obstacles = bool(torch.all(obstacle_dist > obstacle_clearance))
@@ -260,42 +246,6 @@ class ObstacleNavDirectEnv(DirectRLEnv):
 
             self._desired_pos_w[env_id, 0:2] = goal_xy
             self._desired_pos_w[env_id, 2] = torch.empty(1, device=self.device).uniform_(z_min, z_max).item()
-
-    def _sample_free_xy(
-        self,
-        origin_xy: torch.Tensor,
-        placed_xy: list[torch.Tensor],
-        placed_radii: list[float],
-        current_radius: float,
-    ) -> torch.Tensor:
-        for _ in range(self.cfg.obstacle_cfg.max_sampling_attempts):
-            sample = self._uniform_xy(origin_xy)
-            if torch.linalg.norm(sample - origin_xy) <= self.cfg.obstacle_cfg.reserved_spawn_radius + current_radius:
-                continue
-
-            is_valid = True
-            for other_xy, other_radius in zip(placed_xy, placed_radii, strict=False):
-                min_distance = other_radius + current_radius + self.cfg.obstacle_cfg.min_obstacle_clearance
-                if torch.linalg.norm(sample - other_xy) <= min_distance:
-                    is_valid = False
-                    break
-            if is_valid:
-                return sample
-
-        fallback_angle = torch.rand(1, device=self.device).item() * (2.0 * math.pi)
-        fallback_radius = self.cfg.obstacle_cfg.reserved_spawn_radius + current_radius + 0.5
-        return origin_xy + fallback_radius * torch.tensor(
-            (math.cos(fallback_angle), math.sin(fallback_angle)), device=self.device
-        )
-
-    def _uniform_xy(self, origin_xy: torch.Tensor) -> torch.Tensor:
-        half_extent = self.cfg.obstacle_cfg.layout_half_extent
-        sample = torch.empty(2, device=self.device).uniform_(-half_extent, half_extent)
-        return origin_xy + sample
-
-    def _quat_from_yaw(self, yaw: float) -> torch.Tensor:
-        half_yaw = 0.5 * yaw
-        return torch.tensor((math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw)), device=self.device)
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         if debug_vis:

@@ -45,9 +45,10 @@ def build_lidar_cfg(sensor_cfg: SensorSelectionCfg, prim_path: str) -> Optional[
         attach_yaw_only=False,
         pattern_cfg=patterns.LidarPatternCfg(
             channels=sensor_cfg.lidar_channels,
-            horizontal_res=horizontal_resolution,
+            #horizontal_res=horizontal_resolution,
             vertical_fov_range=list(sensor_cfg.lidar_vertical_fov_deg),
             horizontal_fov_range=[-180.0, 180.0],
+            horizontal_res=0.2
         ),
         debug_vis=False,
         mesh_prim_paths=["{ENV_REGEX_NS}/Robot/body"],
