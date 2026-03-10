@@ -9,14 +9,14 @@ from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.envs import ViewerCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
-from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+from isaaclab.markers import VisualizationMarkersCfg
 
 from .cfg import MULTI_RANGER_CFG, CRAZYFLIE_CFG, SensorSelectionCfg, LIDAR_CFG
 
 
 @configclass
 class ObstacleNavEnvCfg(DirectRLEnvCfg):
-    episode_length_s: float = 10.0
+    episode_length_s: float = 20.0
     decimation: int = 2
     action_space: int = 4
     observation_space: int = 12
@@ -70,7 +70,7 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.5, 0.0, 0.5)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(1.5, 0.0, 0.5)),
     )
 
     obstacle_1: RigidObjectCfg = RigidObjectCfg(
@@ -80,22 +80,20 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.5, 0.0, 0.5)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(-1.5, 0.0, 0.5)),
     )
     sensor_selection: SensorSelectionCfg = SensorSelectionCfg(enable_lidar=True, enable_camera=False)
     
-    waypoint_markers = VisualizationMarkers(
-        VisualizationMarkersCfg(
-            prim_path="/Visuals/figure8_waypoints",
-            markers={
-                "waypoint": sim_utils.SphereCfg(
-                    radius=0.05,
-                    visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(0.0, 1.0, 0.0),  # green
-                    ),
+    waypoint_markers: VisualizationMarkersCfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/figure8_waypoints",
+        markers={
+            "waypoint": sim_utils.SphereCfg(
+                radius=0.05,
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.0, 1.0, 0.0),  # green
                 ),
-            },
-        )
+            ),
+        },
     )
 
     # lidar = LIDAR_CFG.replace(
@@ -117,8 +115,9 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
     collision_margin: float = 0.15
     goal_reached_threshold: float = 0.2
     obstacle_safety_distance: float = 1.0
+    obstacle_separation_range: tuple[float, float] = (1.5, 4.0)  # distance between obstacles
     randomize_initial_episode_length: bool = True
-    goal_z_range: tuple[float, float] = (0.6, 1.5)
+    goal_z_range: tuple[float, float] = (0.5, 0.5)
     goal_min_distance_from_spawn: float = 2.0
     goal_clearance_margin: float = 0.75
     layout_half_extent: float = 4.5
