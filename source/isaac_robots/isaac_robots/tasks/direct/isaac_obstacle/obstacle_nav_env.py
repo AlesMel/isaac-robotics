@@ -58,18 +58,38 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self._waypoint_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._waypoint_markers = VisualizationMarkers(self.cfg.waypoint_markers)
 
+        # Previous geodesic distance for progress-based reward
+        self._prev_geo_dist = torch.full((self.num_envs,), float("inf"), device=self.device)
+
         # Stuck detection: terminate if no progress toward goal for too long
         self._best_distance_to_goal = torch.full((self.num_envs,), float("inf"), device=self.device)
         self._steps_without_progress = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._stuck_timeout_steps = int(5.0 / (self.cfg.decimation * self.cfg.sim.dt))  # 5 seconds
 
         # Load geodesic distance field from voxelizer output
-        _voxel_path = os.path.join(os.path.dirname(__file__), "../../../../../../voxel_output/distance_field.npz")
-        _data = np.load(_voxel_path)
-        self._dist_field = torch.tensor(_data["distance_field"], dtype=torch.float32, device=self.device)
+        _voxel_dir = os.path.join(os.path.dirname(__file__), "../../../../../../voxel_output")
+        _data = np.load(os.path.join(_voxel_dir, "distance_field.npz"))
+        # Shape: (num_goals, X, Y, Z) — one field per waypoint goal
+        self._dist_fields = torch.tensor(_data["distance_fields"], dtype=torch.float32, device=self.device)
         self._grid_origin = torch.tensor(_data["origin"], dtype=torch.float32, device=self.device)
         self._grid_resolution = float(_data["resolution"])
-        self._grid_shape = list(self._dist_field.shape)
+        self._grid_shape = list(self._dist_fields.shape[1:])  # (X, Y, Z)
+
+        import json
+        with open(os.path.join(_voxel_dir, "grid_metadata.json")) as _f:
+            _meta = json.load(_f)
+        self._geo_dist_tanh_scale = float(_meta["max_geodesic_dist_m"])
+
+        # Validate that the baked goals match the configured waypoints (world frame = env-local for env_0)
+        _baked_goals = torch.tensor(_data["goals_world"], dtype=torch.float32, device=self.device)
+        assert _baked_goals.shape[0] == self._num_waypoints, (
+            f"distance_field.npz has {_baked_goals.shape[0]} goals but env has {self._num_waypoints} waypoints. "
+            "Re-run voxelizer with all goal positions."
+        )
+        assert torch.allclose(_baked_goals, self._goal_offsets, atol=0.01), (
+            f"Baked goals {_baked_goals.tolist()} don't match waypoint offsets {self._goal_offsets.tolist()}. "
+            "Re-run voxelizer with matching --goals."
+        )
 
         self.set_debug_vis(self.cfg.debug_vis)
 
@@ -80,7 +100,8 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         idx[:, 0].clamp_(0, self._grid_shape[0] - 1)
         idx[:, 1].clamp_(0, self._grid_shape[1] - 1)
         idx[:, 2].clamp_(0, self._grid_shape[2] - 1)
-        return self._dist_field[idx[:, 0], idx[:, 1], idx[:, 2]]  # (num_envs,)
+        # Index per-env field by current waypoint; multiply to convert voxel steps → meters
+        return self._dist_fields[self._waypoint_idx, idx[:, 0], idx[:, 1], idx[:, 2]] * self._grid_resolution
 
     def _setup_scene(self) -> None:
         self._robot = Articulation(self.cfg.robot)
@@ -161,7 +182,11 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         ang_vel = torch.sum(torch.square(self._robot.data.root_ang_vel_b), dim=1)
         distance_to_goal = torch.linalg.norm(self._desired_pos_w - self._robot.data.root_pos_w, dim=1)
         geo_dist = self._query_distance_field(self._robot.data.root_pos_w)
-        distance_to_goal_mapped = 1.0 - torch.tanh(geo_dist / 0.8)
+        # Clamp prev to current on first step (prev=inf after reset)
+        self._prev_geo_dist = torch.minimum(self._prev_geo_dist, geo_dist)
+        geo_dist_improvement = self._prev_geo_dist - geo_dist  # positive = approaching goal
+        self._prev_geo_dist = geo_dist.detach()
+        distance_to_goal_mapped = geo_dist_improvement  # meters of geodesic progress per step
 
         # Waypoint reached: advance to next and update target
         goal_reached = (distance_to_goal < self.cfg.goal_reached_threshold).float()
@@ -233,6 +258,7 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self._thrust[env_ids] = 0.0
         self._moment[env_ids] = 0.0
         self._best_distance_to_goal[env_ids] = float("inf")
+        self._prev_geo_dist[env_ids] = float("inf")
         self._steps_without_progress[env_ids] = 0
 
         self._waypoints_w[env_ids] = self._env_origins[env_ids].unsqueeze(1) + self._goal_offsets.unsqueeze(0)

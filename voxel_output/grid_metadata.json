@@ -10,15 +10,12 @@
     222,
     220
   ],
-  "goal_world": [
-    -4.5,
-    3.5,
-    7.0
-  ],
-  "goal_voxel": [
-    21,
-    181,
-    150
+  "goals_world": [
+    [
+      -4.5,
+      3.5,
+      7.0
+    ]
   ],
   "occupied_voxels": 2360658,
   "total_voxels": 10891320,

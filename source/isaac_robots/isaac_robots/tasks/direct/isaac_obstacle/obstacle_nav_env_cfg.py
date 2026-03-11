@@ -30,7 +30,7 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
     debug_vis = True
 
     viewer: ViewerCfg = ViewerCfg(
-        eye=(1.0, 1.0, 1.0),
+        eye=(0.1, 0.1, 0.1),
         lookat=(0.0, 0.0, 0.0),
         origin_type="asset_root",
         # origin_type="env",

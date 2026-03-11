@@ -458,21 +458,21 @@ def save_3d_visualization(grid, dist_field, origin, resolution, goal_world,
 # 5. INTEGRATION HELPER: Export for IsaacLab env
 # ──────────────────────────────────────────────────────────────────────────────
 
-def save_for_training(grid, dist_field, origin, resolution, output_dir):
+def save_for_training(grid, dist_fields, goals_world, origin, resolution, output_dir):
     """
     Save data in a format easy to load in your DirectRLEnv.
 
-    In your env's __init__ or _setup_scene:
-        data = np.load("distance_field.npz")
-        self._dist_field = torch.tensor(data["distance_field"], device=self.device)
-        self._grid_origin = torch.tensor(data["origin"], device=self.device)
-        self._grid_res = float(data["resolution"])
+    dist_fields: np.ndarray shape (num_goals, X, Y, Z), voxel-step counts (not meters).
+    goals_world: np.ndarray shape (num_goals, 3), world-frame goal positions.
 
-    Then in _get_rewards:
-        pos = self.drone_pos[:, :3]  # (num_envs, 3)
-        idx = ((pos - self._grid_origin) / self._grid_res).long()
-        idx = idx.clamp(min=0, max=torch.tensor(self._dist_field.shape)-1)
-        potential = self._dist_field[idx[:,0], idx[:,1], idx[:,2]] * self._grid_res
+    In your env's __init__:
+        data = np.load("distance_field.npz")
+        self._dist_fields = torch.tensor(data["distance_fields"], device=self.device)
+        self._grid_origin = torch.tensor(data["origin"], device=self.device)
+        self._grid_resolution = float(data["resolution"])
+
+    Then in _query_distance_field (per env, indexed by waypoint):
+        return self._dist_fields[self._waypoint_idx, ix, iy, iz] * self._grid_resolution
     """
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -480,7 +480,8 @@ def save_for_training(grid, dist_field, origin, resolution, output_dir):
     np.savez_compressed(
         out / "distance_field.npz",
         occupancy=grid,
-        distance_field=dist_field,
+        distance_fields=dist_fields,   # (num_goals, X, Y, Z) — voxel units
+        goals_world=goals_world,        # (num_goals, 3)       — world coords
         origin=origin,
         resolution=np.array([resolution]),
     )
@@ -512,8 +513,9 @@ def main():
                         help="Use built-in sample obstacles (no USD needed)")
     parser.add_argument("--resolution", type=float, default=0.05,
                         help="Voxel size in meters (default: 0.1)")
-    parser.add_argument("--goal", type=float, nargs=3, default= [-4.5, 3.5, 7.0],
-                        help="Goal position x y z in world coords")
+    parser.add_argument("--goal", type=float, nargs=3, action="append", dest="goals",
+                        metavar=("X", "Y", "Z"),
+                        help="Goal position x y z in world coords (repeat for multiple waypoints)")
     parser.add_argument("--z-min", type=float, default=None,
                         help="Override z-min bound")
     parser.add_argument("--z-max", type=float, default=None,
@@ -526,6 +528,8 @@ def main():
                         help="Drone flight height for 2D slice visualization")
 
     args = parser.parse_args()
+    if not args.goals:
+        args.goals = [[-4.5, 3.5, 7.0]]  # default single goal
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -576,13 +580,17 @@ def main():
     print("STEP 3: Computing BFS distance field")
     print("=" * 60)
 
-    goal_world = np.array(args.goal)
-    goal_idx = np.round((goal_world - origin) / res).astype(int)
-    goal_idx = np.clip(goal_idx, 0, np.array(grid.shape) - 1)
-    print(f"  Goal world: {goal_world}")
-    print(f"  Goal voxel: {goal_idx}")
-
-    dist_field = bfs_distance_field_3d(grid, tuple(goal_idx))
+    goals_world = np.array(args.goals)  # (num_goals, 3)
+    dist_fields = []
+    for i, goal_world in enumerate(goals_world):
+        goal_idx = np.round((goal_world - origin) / res).astype(int)
+        goal_idx = np.clip(goal_idx, 0, np.array(grid.shape) - 1)
+        print(f"  Goal {i} world: {goal_world}  voxel: {goal_idx}")
+        dist_fields.append(bfs_distance_field_3d(grid, tuple(goal_idx)))
+    dist_fields = np.stack(dist_fields)  # (num_goals, X, Y, Z)
+    # Use first goal for visualizations
+    goal_world = goals_world[0]
+    dist_field = dist_fields[0]
 
     # ── Save outputs ──
     print("\n" + "=" * 60)
@@ -594,12 +602,11 @@ def main():
         "resolution": res,
         "origin": origin.tolist(),
         "grid_shape": list(grid.shape),
-        "goal_world": goal_world.tolist(),
-        "goal_voxel": goal_idx.tolist(),
+        "goals_world": goals_world.tolist(),
         "occupied_voxels": int(grid.sum()),
         "total_voxels": int(grid.size),
-        "max_geodesic_dist_m": float(dist_field[np.isfinite(dist_field)].max() * res)
-            if np.any(np.isfinite(dist_field) & (dist_field > 0)) else 0,
+        "max_geodesic_dist_m": float(dist_fields[np.isfinite(dist_fields)].max() * res)
+            if np.any(np.isfinite(dist_fields) & (dist_fields > 0)) else 0,
     }
     with open(output_dir / "grid_metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
@@ -611,7 +618,7 @@ def main():
     print(f"  Saved occupancy_grid.npy and distance_field.npy")
 
     # Training-ready format
-    save_for_training(grid, dist_field, origin, res, output_dir)
+    save_for_training(grid, dist_fields, goals_world, origin, res, output_dir)
 
     # Visualizations
     print("\n" + "=" * 60)
