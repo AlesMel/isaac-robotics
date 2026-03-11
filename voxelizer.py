@@ -163,6 +163,9 @@ def voxelize(obstacles, resolution, bounds=None, padding=0.5):
         imin = np.floor((np.array(obs["min"]) - origin) / resolution).astype(int)
         imax = np.ceil((np.array(obs["max"]) - origin) / resolution).astype(int)
 
+        # Ensure at least 1 voxel thickness on every axis (fixes thin planes)
+        imax = np.maximum(imax, imin + 1)
+
         # Clamp to grid bounds
         imin = np.clip(imin, 0, dims - 1)
         imax = np.clip(imax, 0, dims)

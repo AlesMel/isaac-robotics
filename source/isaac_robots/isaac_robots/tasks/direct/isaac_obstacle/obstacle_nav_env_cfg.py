@@ -121,7 +121,7 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
     moment_scale: float = 0.01
     lin_vel_reward_scale: float = -0.05
     ang_vel_reward_scale: float = -0.01
-    distance_to_goal_reward_scale: float = 15.0
+    distance_to_goal_reward_scale: float = 15.0  # uses geodesic distance from voxel field
     goal_reached_bonus: float = 15.0
     goal_reached_threshold: float = 0.2
     randomize_initial_episode_length: bool = True

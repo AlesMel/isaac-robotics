@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import numpy as np
 import torch
 from gymnasium import spaces
@@ -62,7 +63,24 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self._steps_without_progress = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._stuck_timeout_steps = int(5.0 / (self.cfg.decimation * self.cfg.sim.dt))  # 5 seconds
 
+        # Load geodesic distance field from voxelizer output
+        _voxel_path = os.path.join(os.path.dirname(__file__), "../../../../../../voxel_output/distance_field.npz")
+        _data = np.load(_voxel_path)
+        self._dist_field = torch.tensor(_data["distance_field"], dtype=torch.float32, device=self.device)
+        self._grid_origin = torch.tensor(_data["origin"], dtype=torch.float32, device=self.device)
+        self._grid_resolution = float(_data["resolution"])
+        self._grid_shape = list(self._dist_field.shape)
+
         self.set_debug_vis(self.cfg.debug_vis)
+
+    def _query_distance_field(self, pos_w: torch.Tensor) -> torch.Tensor:
+        """Look up geodesic distance-to-goal for each env given world-frame positions."""
+        local = pos_w - self._env_origins  # (num_envs, 3) — env-local frame
+        idx = ((local - self._grid_origin) / self._grid_resolution).long()
+        idx[:, 0].clamp_(0, self._grid_shape[0] - 1)
+        idx[:, 1].clamp_(0, self._grid_shape[1] - 1)
+        idx[:, 2].clamp_(0, self._grid_shape[2] - 1)
+        return self._dist_field[idx[:, 0], idx[:, 1], idx[:, 2]]  # (num_envs,)
 
     def _setup_scene(self) -> None:
         self._robot = Articulation(self.cfg.robot)
@@ -142,7 +160,8 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         lin_vel = torch.sum(torch.square(self._robot.data.root_lin_vel_b), dim=1)
         ang_vel = torch.sum(torch.square(self._robot.data.root_ang_vel_b), dim=1)
         distance_to_goal = torch.linalg.norm(self._desired_pos_w - self._robot.data.root_pos_w, dim=1)
-        distance_to_goal_mapped = 1.0 - torch.tanh(distance_to_goal / 0.8)
+        geo_dist = self._query_distance_field(self._robot.data.root_pos_w)
+        distance_to_goal_mapped = 1.0 - torch.tanh(geo_dist / 0.8)
 
         # Waypoint reached: advance to next and update target
         goal_reached = (distance_to_goal < self.cfg.goal_reached_threshold).float()
