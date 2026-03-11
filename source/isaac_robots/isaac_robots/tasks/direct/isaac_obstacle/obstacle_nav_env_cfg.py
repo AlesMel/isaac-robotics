@@ -19,7 +19,7 @@ from .cfg import MULTI_RANGER_CFG, CRAZYFLIE_CFG, SensorSelectionCfg, LIDAR_CFG
 
 @configclass
 class ObstacleNavEnvCfg(DirectRLEnvCfg):
-    episode_length_s: float = 20.0
+    episode_length_s: float = 10.0
     decimation: int = 2
     action_space: int = 4
     observation_space: int = 12
