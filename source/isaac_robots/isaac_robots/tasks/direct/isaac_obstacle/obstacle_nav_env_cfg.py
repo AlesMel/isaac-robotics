@@ -13,6 +13,9 @@ from isaaclab.envs import ViewerCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 from isaaclab.markers import VisualizationMarkersCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
+import isaaclab.sim as sim_utils
+
+from isaaclab.sensors import ContactSensorCfg
 
 from .cfg import MULTI_RANGER_CFG, CRAZYFLIE_CFG, SensorSelectionCfg, LIDAR_CFG
 
@@ -27,9 +30,10 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
     debug_vis = True
 
     viewer: ViewerCfg = ViewerCfg(
-        eye=(2.0, 2.0, 2.0),
-        lookat=(0.0, 0.0, 0.5),
-        origin_type="env",
+        eye=(1.0, 1.0, 1.0),
+        lookat=(0.0, 0.0, 0.0),
+        origin_type="asset_root",
+        # origin_type="env",
         env_index=0,
         asset_name="robot",
     )
@@ -58,16 +62,32 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
         ),
         debug_vis=False,
     )
-    robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+    robot: ArticulationCfg = CRAZYFLIE_CFG.replace(
+        prim_path="/World/envs/env_.*/Robot",
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(3.5, 4.0, 5.0),
+            joint_pos={".*": 0.0},
+            joint_vel={
+                "m1_joint": 200.0,
+                "m2_joint": -200.0,
+                "m3_joint": 200.0,
+                "m4_joint": -200.0,
+            },
+        ),
+    )
     warehouse: AssetBaseCfg = AssetBaseCfg(
         prim_path="/World/envs/env_.*/Warehouse",
         spawn=UsdFileCfg(
-            usd_path=os.path.join(os.path.dirname(__file__), "warehouse.usd"),
+            usd_path=os.path.join(os.path.dirname(__file__), "primhouse2.usd"),
+            # rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            #     kinematic_enabled=True,  # static, won't move from forces
+            # ),
+            #collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
         ),
     )
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=4096,
-        env_spacing=20.0,
+        env_spacing=11.0,
         replicate_physics=True,
         clone_in_fabric=False,
     )
@@ -91,6 +111,12 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
     lidar = MULTI_RANGER_CFG.replace(
         prim_path="/World/envs/env_.*/Robot/body",
     )
+    contact_sensor: ContactSensorCfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/body",
+        history_length=1,
+        track_air_time=False,
+    )
+    collision_force_threshold: float = 0.5  # N
     thrust_to_weight: float = 1.9
     moment_scale: float = 0.01
     lin_vel_reward_scale: float = -0.05

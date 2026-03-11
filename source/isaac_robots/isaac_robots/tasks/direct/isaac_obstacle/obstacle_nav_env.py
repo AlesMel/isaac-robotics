@@ -8,6 +8,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
 from isaaclab.markers import VisualizationMarkers
+from isaaclab.sensors import ContactSensor
 from isaaclab.utils.math import subtract_frame_transforms
 
 from isaaclab.markers import CUBOID_MARKER_CFG  # isort: skip
@@ -39,14 +40,13 @@ class ObstacleNavDirectEnv(DirectRLEnv):
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
             for key in ["lin_vel", "ang_vel", "distance_to_goal", "goal_reached"]
         }
-        self._num_waypoints = 2
         self._goal_offsets = torch.tensor(
             [
-                [0.0, 0.6, 0.8],   # GOAL0
-                [-2.0, 1.6, 0.12],  # GOAL1
+                [-4.5, 3.5, 7.0],   # GOAL0
             ],
             device=self.device,
         )
+        self._num_waypoints = len(self._goal_offsets)
 
         self._body_id = self._robot.find_bodies("body")[0]
         self._robot_mass = self._robot.root_physx_view.get_masses()[0].sum()
@@ -81,6 +81,9 @@ class ObstacleNavDirectEnv(DirectRLEnv):
             self.scene.sensors["lidar"] = self._lidar
         else:
             self._lidar = None
+
+        self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
+        self.scene.sensors["contact_sensor"] = self._contact_sensor
 
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
@@ -163,8 +166,8 @@ class ObstacleNavDirectEnv(DirectRLEnv):
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        too_low = self._robot.data.root_pos_w[:, 2] < 0.1
-        too_high = self._robot.data.root_pos_w[:, 2] > 2.5
+        # too_low = self._robot.data.root_pos_w[:, 2] < 0.1
+        # too_high = self._robot.data.root_pos_w[:, 2] > 2.5
 
         # Stuck detection: track progress toward current goal
         distance_to_goal = torch.linalg.norm(self._desired_pos_w - self._robot.data.root_pos_w, dim=1)
@@ -173,7 +176,11 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self._steps_without_progress = torch.where(improved, torch.zeros_like(self._steps_without_progress), self._steps_without_progress + 1)
         stuck = self._steps_without_progress >= self._stuck_timeout_steps
 
-        died = too_low | too_high | stuck
+        # Collision detection: any contact force above threshold terminates the episode
+        contact_forces = self._contact_sensor.data.net_forces_w_history[:, 0, 0, :]  # [num_envs, 3]
+        collided = torch.linalg.norm(contact_forces, dim=-1) > self.cfg.collision_force_threshold
+
+        died = stuck | collided
         return died, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None) -> None:
