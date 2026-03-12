@@ -5,7 +5,14 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:isaac-sim.github.io)",
       "Bash(curl -sL \"https://raw.githubusercontent.com/isaac-sim/IsaacLab/main/source/isaaclab_tasks/isaaclab_tasks/direct/quadcopter/quadcopter_env.py\")",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(find /home/urkui-3/Documents/isaac-robotics -name *skrl* -type f)",
+      "Bash(grep -r \"SkrlVecEnvWrapper\\\\|from isaaclab_rl\" /home/urkui-3/Documents/isaac-robotics --include=*.py)",
+      "Bash(grep -r environment_info /home/urkui-3/Documents/isaac-robotics --include=*.py)",
+      "Bash(find /home/urkui-3 -path *site-packages* -prune -o -name *.py -type f -exec grep -l \"def run\\\\|class Runner\" {})",
+      "Bash(2)",
+      "Bash(find /home/urkui-3/Documents/skrl -name *runner* -type f)",
+      "Bash(grep -E \"\\\\.py$\")"
     ]
   }
 }

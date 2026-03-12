@@ -29,7 +29,7 @@ MULTI_RANGER_CFG = MultiMeshRayCasterCfg(
         "/World/ground",
         MultiMeshRayCasterCfg.RaycastTargetCfg(prim_expr="/World/envs/env_.*/Warehouse"),
     ],
-    debug_vis=True,
+    debug_vis=False,
 )
 
 def _compute_ray_count(cfg: patterns.PatternBaseCfg) -> tuple[int, int]:

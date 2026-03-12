@@ -27,7 +27,7 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
     action_space: int = 4
     observation_space: int = 12
     state_space: int = 0
-    debug_vis = True
+    debug_vis = False
 
     viewer: ViewerCfg = ViewerCfg(
         eye=(0.1, 0.1, 0.1),
@@ -116,7 +116,7 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
         history_length=1,
         track_air_time=False,
     )
-    collision_force_threshold: float = 0.5  # N
+    collision_force_threshold: float = 2.0  # N
     thrust_to_weight: float = 1.9
     moment_scale: float = 0.01
     lin_vel_reward_scale: float = -0.05

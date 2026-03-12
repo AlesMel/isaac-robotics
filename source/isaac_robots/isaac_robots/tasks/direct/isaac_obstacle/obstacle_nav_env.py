@@ -39,11 +39,12 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
         self._episode_sums = {
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-            for key in ["lin_vel", "ang_vel", "distance_to_goal", "goal_reached"]
+            for key in ["lin_vel", "ang_vel", "distance_to_goal", "goal_reached", "geo_dist_improvement"]
         }
         self._goal_offsets = torch.tensor(
             [
-                [-4.5, 3.5, 7.0],   # GOAL0
+                [0.0, -2.0, 3.0],    # GOAL0
+                [-4.5, 3.5, 7.0],   # GOAL1
             ],
             device=self.device,
         )
@@ -65,6 +66,8 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self._best_distance_to_goal = torch.full((self.num_envs,), float("inf"), device=self.device)
         self._steps_without_progress = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._stuck_timeout_steps = int(5.0 / (self.cfg.decimation * self.cfg.sim.dt))  # 5 seconds
+        self._last_stuck = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._last_collided = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         # Load geodesic distance field from voxelizer output
         _voxel_dir = os.path.join(os.path.dirname(__file__), "../../../../../../voxel_output")
@@ -130,8 +133,7 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self._env_origins = self._terrain.env_origins
         
         self.scene.clone_environments(copy_from_source=False)
-        if self.device == "cpu":
-            self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
+        self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
 
         # self._env_origins = self._terrain.env_origins
 
@@ -182,6 +184,8 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         ang_vel = torch.sum(torch.square(self._robot.data.root_ang_vel_b), dim=1)
         distance_to_goal = torch.linalg.norm(self._desired_pos_w - self._robot.data.root_pos_w, dim=1)
         geo_dist = self._query_distance_field(self._robot.data.root_pos_w)
+        # Replace inf/NaN (unreachable voxels) with a large finite value so subtraction is well-defined
+        geo_dist = torch.nan_to_num(geo_dist, nan=0.0, posinf=self._geo_dist_tanh_scale * 10.0)
         # Clamp prev to current on first step (prev=inf after reset)
         self._prev_geo_dist = torch.minimum(self._prev_geo_dist, geo_dist)
         geo_dist_improvement = self._prev_geo_dist - geo_dist  # positive = approaching goal
@@ -205,6 +209,7 @@ class ObstacleNavDirectEnv(DirectRLEnv):
 
         for key, value in rewards.items():
             self._episode_sums[key] += value
+        self._episode_sums["geo_dist_improvement"] += geo_dist_improvement
 
         return reward
 
@@ -225,6 +230,8 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         collided = torch.linalg.norm(contact_forces, dim=-1) > self.cfg.collision_force_threshold
 
         died = stuck | collided
+        self._last_stuck = stuck
+        self._last_collided = collided
         return died, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None) -> None:
@@ -250,9 +257,11 @@ class ObstacleNavDirectEnv(DirectRLEnv):
 
         self.extras["log"] = {}
         self.extras["log"].update(extras)
-        self.extras["log"]["Episode_Termination/died"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
-        self.extras["log"]["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
-        self.extras["log"]["Metrics/final_distance_to_goal"] = final_distance_to_goal.item()
+        self.extras["log"]["Episode_Termination/died"] = torch.count_nonzero(self.reset_terminated[env_ids]).float()
+        self.extras["log"]["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).float()
+        self.extras["log"]["Episode_Termination/stuck"] = torch.count_nonzero(self._last_stuck[env_ids]).float()
+        self.extras["log"]["Episode_Termination/collided"] = torch.count_nonzero(self._last_collided[env_ids]).float()
+        self.extras["log"]["Metrics/final_distance_to_goal"] = final_distance_to_goal
 
         self._actions[env_ids] = 0.0
         self._thrust[env_ids] = 0.0
