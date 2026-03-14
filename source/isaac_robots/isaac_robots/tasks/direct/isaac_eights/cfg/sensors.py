@@ -26,7 +26,7 @@ MULTI_RANGER_CFG = MultiMeshRayCasterCfg(
     pattern_cfg=CrazyflieToFPatternCfg(),
     max_distance=4.0, # Multi-ranger limit is 4 meters
     mesh_prim_paths=[
-        "/World/ground",
+        #"/World/ground",
         MultiMeshRayCasterCfg.RaycastTargetCfg(prim_expr="/World/envs/env_.*/Obstacle_.*")
     ],
     debug_vis=True,

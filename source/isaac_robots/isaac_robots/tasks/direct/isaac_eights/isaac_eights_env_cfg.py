@@ -11,7 +11,7 @@ from isaaclab.envs import ViewerCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 from isaaclab.markers import VisualizationMarkersCfg
 
-from .cfg import MULTI_RANGER_CFG, CRAZYFLIE_CFG, SensorSelectionCfg, LIDAR_CFG
+from .cfg import MULTI_RANGER_CFG, CRAZYFLIE_CFG, SensorSelectionCfg
 
 
 @configclass
@@ -42,6 +42,7 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
             restitution=0.0,
         ),
     )
+    
     terrain: TerrainImporterCfg = TerrainImporterCfg(
         prim_path="/World/ground",
         terrain_type="plane",
@@ -55,6 +56,7 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
         ),
         debug_vis=False,
     )
+
     robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=4096,

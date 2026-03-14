@@ -15,7 +15,7 @@ from .sensors import SensorSelectionCfg, build_lidar_cfg
 @configclass
 class ObstacleNavSceneCfg(InteractiveSceneCfg):
     robot = CRAZYFLIE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
-    ground: AssetBaseCfg = AssetBaseCfg(prim_path="/World/ground", spawn=sim_utils.GroundPlaneCfg())
+    #ground: AssetBaseCfg = AssetBaseCfg(prim_path="/World/ground", spawn=sim_utils.GroundPlaneCfg())
     dome_light: AssetBaseCfg = AssetBaseCfg(
         prim_path="/World/Light",
         spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=2500.0),

@@ -77,6 +77,7 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
+        
         self._env_origins = self._terrain.env_origins
         
         self.scene.clone_environments(copy_from_source=False)
