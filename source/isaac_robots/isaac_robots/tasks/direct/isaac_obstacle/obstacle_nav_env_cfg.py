@@ -27,7 +27,7 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
     action_space: int = 4
     observation_space: int = 12
     state_space: int = 0
-    debug_vis: bool = False
+    debug_vis: bool = True
 
     viewer: ViewerCfg = ViewerCfg(
         eye=(3.0, 3.0, 3.0),
@@ -127,9 +127,9 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
     # Stability
     tilt_reward_scale: float = -0.5
     action_smoothness_scale: float = -0.15
-    # Incentives
-    survival_bonus: float = 1.5
-    heading_reward_scale: float = 0.3
+    # A* path planning
+    path_subsample_spacing: float = 0.5    # meters between consecutive path waypoints
+    path_advance_threshold: float = 0.3    # advance to next path waypoint when closer than this
 
 
     def __post_init__(self) -> None:

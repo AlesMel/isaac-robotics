@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/Users/alesm/Documents/IsaacLab -type f -name *contact* -o -name *termination*)",
+      "Bash(python -c \"import numba; print\\(f''numba {numba.__version__}''\\)\")",
+      "Bash(where python3:*)",
+      "Bash(where conda:*)"
+    ]
+  }
+}

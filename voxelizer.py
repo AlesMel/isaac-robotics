@@ -26,6 +26,7 @@ Usage (without USD -- from obstacle config dict):
 """
 
 import argparse
+import heapq
 import json
 import os
 import sys
@@ -180,13 +181,140 @@ def voxelize(obstacles, resolution, bounds=None, padding=0.5):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3. BFS DISTANCE FIELD (3D)
+# 3. DIJKSTRA DISTANCE FIELD (3D, 26-connected)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def bfs_distance_field_3d(grid, goal_idx):
+# Pre-computed 26-connected neighbor offsets with Euclidean costs
+_NEIGHBORS_26_LIST = []
+for _dx in (-1, 0, 1):
+    for _dy in (-1, 0, 1):
+        for _dz in (-1, 0, 1):
+            if _dx == 0 and _dy == 0 and _dz == 0:
+                continue
+            _cost = (_dx*_dx + _dy*_dy + _dz*_dz) ** 0.5  # 1.0, √2, or √3
+            _NEIGHBORS_26_LIST.append((_dx, _dy, _dz, _cost))
+_NEIGHBORS_26 = np.array(_NEIGHBORS_26_LIST, dtype=np.float64)  # (26, 4)
+
+
+try:
+    from numba import njit
+
+    @njit(cache=True)
+    def _dijkstra_core(grid, dist, gx, gy, gz, neighbors):
+        """Numba-accelerated Dijkstra inner loop (26-connected)."""
+        nx, ny, nz = grid.shape
+
+        # Manual min-heap using parallel arrays (numba can't use heapq)
+        HEAP_INIT = nx * ny * nz
+        heap_d = np.empty(HEAP_INIT, dtype=np.float32)
+        heap_x = np.empty(HEAP_INIT, dtype=np.int32)
+        heap_y = np.empty(HEAP_INIT, dtype=np.int32)
+        heap_z = np.empty(HEAP_INIT, dtype=np.int32)
+        heap_size = 1
+        heap_d[0] = 0.0
+        heap_x[0] = gx
+        heap_y[0] = gy
+        heap_z[0] = gz
+        visited = 0
+
+        while heap_size > 0:
+            # Pop min (index 0)
+            d = heap_d[0]
+            x = heap_x[0]
+            y = heap_y[0]
+            z = heap_z[0]
+            heap_size -= 1
+            # Move last element to root and sift down
+            if heap_size > 0:
+                heap_d[0] = heap_d[heap_size]
+                heap_x[0] = heap_x[heap_size]
+                heap_y[0] = heap_y[heap_size]
+                heap_z[0] = heap_z[heap_size]
+                # Sift down
+                pos = 0
+                while True:
+                    child = 2 * pos + 1
+                    if child >= heap_size:
+                        break
+                    right = child + 1
+                    if right < heap_size and heap_d[right] < heap_d[child]:
+                        child = right
+                    if heap_d[child] < heap_d[pos]:
+                        heap_d[pos], heap_d[child] = heap_d[child], heap_d[pos]
+                        heap_x[pos], heap_x[child] = heap_x[child], heap_x[pos]
+                        heap_y[pos], heap_y[child] = heap_y[child], heap_y[pos]
+                        heap_z[pos], heap_z[child] = heap_z[child], heap_z[pos]
+                        pos = child
+                    else:
+                        break
+
+            if d > dist[x, y, z]:
+                continue
+
+            for ni in range(26):
+                dx = int(neighbors[ni, 0])
+                dy = int(neighbors[ni, 1])
+                dz = int(neighbors[ni, 2])
+                cost = np.float32(neighbors[ni, 3])
+                nx2 = x + dx
+                ny2 = y + dy
+                nz2 = z + dz
+                if 0 <= nx2 < nx and 0 <= ny2 < ny and 0 <= nz2 < nz:
+                    if not grid[nx2, ny2, nz2]:
+                        nd = d + cost
+                        if nd < dist[nx2, ny2, nz2]:
+                            dist[nx2, ny2, nz2] = nd
+                            visited += 1
+                            # Push to heap and sift up
+                            if heap_size >= len(heap_d):
+                                # Grow arrays (shouldn't happen with good initial size)
+                                new_cap = heap_size * 2
+                                new_d = np.empty(new_cap, dtype=np.float32)
+                                new_x = np.empty(new_cap, dtype=np.int32)
+                                new_y = np.empty(new_cap, dtype=np.int32)
+                                new_z = np.empty(new_cap, dtype=np.int32)
+                                new_d[:heap_size] = heap_d[:heap_size]
+                                new_x[:heap_size] = heap_x[:heap_size]
+                                new_y[:heap_size] = heap_y[:heap_size]
+                                new_z[:heap_size] = heap_z[:heap_size]
+                                heap_d = new_d
+                                heap_x = new_x
+                                heap_y = new_y
+                                heap_z = new_z
+                            heap_d[heap_size] = nd
+                            heap_x[heap_size] = nx2
+                            heap_y[heap_size] = ny2
+                            heap_z[heap_size] = nz2
+                            pos = heap_size
+                            heap_size += 1
+                            # Sift up
+                            while pos > 0:
+                                parent = (pos - 1) // 2
+                                if heap_d[pos] < heap_d[parent]:
+                                    heap_d[pos], heap_d[parent] = heap_d[parent], heap_d[pos]
+                                    heap_x[pos], heap_x[parent] = heap_x[parent], heap_x[pos]
+                                    heap_y[pos], heap_y[parent] = heap_y[parent], heap_y[pos]
+                                    heap_z[pos], heap_z[parent] = heap_z[parent], heap_z[pos]
+                                    pos = parent
+                                else:
+                                    break
+
+        return visited
+
+    _HAS_NUMBA = True
+    print("[voxelizer] Numba available — using JIT-compiled Dijkstra")
+
+except ImportError:
+    _HAS_NUMBA = False
+    print("[voxelizer] Numba not available — falling back to pure-Python Dijkstra (slow)")
+
+
+def dijkstra_distance_field_3d(grid, goal_idx):
     """
-    Compute geodesic distance from goal through free space using 3D BFS.
-    Uses 6-connected neighbors (face-adjacent).
+    Compute geodesic distance from goal through free space using Dijkstra's algorithm
+    with 26-connected neighbors (face, edge, and corner adjacent).
+
+    Uses Numba JIT if available (~20-50x faster), otherwise falls back to pure Python.
 
     Args:
         grid: 3D boolean occupancy (True = blocked)
@@ -201,12 +329,123 @@ def bfs_distance_field_3d(grid, goal_idx):
     if grid[gx, gy, gz]:
         print(f"  WARNING: Goal voxel [{gx},{gy},{gz}] is inside an obstacle!")
         print("  Searching for nearest free voxel...")
-        # Find nearest free voxel
+        free = np.argwhere(~grid)
+        dists = np.abs(free - np.array([gx, gy, gz])).sum(axis=1)
+        nearest = free[dists.argmin()]
+        gx, gy, gz = int(nearest[0]), int(nearest[1]), int(nearest[2])
+        print(f"  Using [{gx},{gy},{gz}] instead.")
+
+    dist = np.full((nx, ny, nz), np.inf, dtype=np.float32)
+    dist[gx, gy, gz] = 0.0
+
+    if _HAS_NUMBA:
+        visited = _dijkstra_core(grid, dist, gx, gy, gz, _NEIGHBORS_26)
+    else:
+        # Pure-Python fallback
+        heap = [(0.0, gx, gy, gz)]
+        visited = 0
+        while heap:
+            d, x, y, z = heapq.heappop(heap)
+            if d > dist[x, y, z]:
+                continue
+            for dx, dy, dz, cost in _NEIGHBORS_26_LIST:
+                nx2, ny2, nz2 = x + int(dx), y + int(dy), z + int(dz)
+                if 0 <= nx2 < nx and 0 <= ny2 < ny and 0 <= nz2 < nz:
+                    if not grid[nx2, ny2, nz2]:
+                        nd = d + cost
+                        if nd < dist[nx2, ny2, nz2]:
+                            dist[nx2, ny2, nz2] = nd
+                            heapq.heappush(heap, (nd, nx2, ny2, nz2))
+                            visited += 1
+
+    reachable = np.isfinite(dist).sum() - 1  # exclude goal itself
+    free_total = (~grid).sum()
+    print(f"  Dijkstra visited {visited:,} voxels")
+    print(f"  Reachable from goal: {reachable:,} / {free_total:,} free voxels "
+          f"({100*reachable/max(free_total,1):.1f}%)")
+
+    return dist
+
+
+def astar_path_3d(grid, start_idx, goal_idx):
+    """
+    A* shortest path on a 3D occupancy grid with 26-connected neighbors.
+
+    Args:
+        grid: 3D boolean occupancy (True = blocked)
+        start_idx: (gx, gy, gz) grid indices of start
+        goal_idx: (gx, gy, gz) grid indices of goal
+
+    Returns:
+        List of (x, y, z) voxel indices from start to goal, or [] if unreachable.
+    """
+    nx, ny, nz = grid.shape
+
+    def _nearest_free(idx):
+        if not grid[idx]:
+            return idx
+        free = np.argwhere(~grid)
+        dists = np.linalg.norm(free - np.array(idx), axis=1)
+        return tuple(free[dists.argmin()])
+
+    start_idx = _nearest_free(start_idx)
+    goal_idx = _nearest_free(goal_idx)
+    gx, gy, gz = goal_idx
+
+    # 3-D octile heuristic (admissible for 26-connected grids)
+    def h(pos):
+        vals = sorted([abs(pos[0] - gx), abs(pos[1] - gy), abs(pos[2] - gz)])
+        return (1.7320508 - 1.4142136) * vals[0] + (1.4142136 - 1.0) * vals[1] + vals[2]
+
+    open_set = [(h(start_idx), 0.0, start_idx)]
+    g_score = {start_idx: 0.0}
+    came_from = {}
+    closed = set()
+
+    while open_set:
+        _f, g, cur = heapq.heappop(open_set)
+        if cur == goal_idx:
+            path = [cur]
+            while cur in came_from:
+                cur = came_from[cur]
+                path.append(cur)
+            return path[::-1]
+        if cur in closed:
+            continue
+        closed.add(cur)
+        cx, cy, cz = cur
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    if dx == 0 and dy == 0 and dz == 0:
+                        continue
+                    x2, y2, z2 = cx + dx, cy + dy, cz + dz
+                    if 0 <= x2 < nx and 0 <= y2 < ny and 0 <= z2 < nz:
+                        nb = (x2, y2, z2)
+                        if nb in closed or grid[x2, y2, z2]:
+                            continue
+                        cost = (dx * dx + dy * dy + dz * dz) ** 0.5
+                        ng = g + cost
+                        if nb not in g_score or ng < g_score[nb]:
+                            g_score[nb] = ng
+                            came_from[nb] = cur
+                            heapq.heappush(open_set, (ng + h(nb), ng, nb))
+    return []
+
+
+def bfs_distance_field_3d(grid, goal_idx):
+    """
+    Legacy BFS (6-connected, integer steps). Kept for comparison.
+    Use dijkstra_distance_field_3d for training.
+    """
+    nx, ny, nz = grid.shape
+    gx, gy, gz = goal_idx
+
+    if grid[gx, gy, gz]:
         free = np.argwhere(~grid)
         dists = np.abs(free - np.array([gx, gy, gz])).sum(axis=1)
         nearest = free[dists.argmin()]
         gx, gy, gz = nearest
-        print(f"  Using [{gx},{gy},{gz}] instead.")
 
     dist = np.full((nx, ny, nz), np.inf, dtype=np.float32)
     dist[gx, gy, gz] = 0
@@ -214,7 +453,6 @@ def bfs_distance_field_3d(grid, goal_idx):
     queue = deque([(gx, gy, gz)])
     neighbors = [(1,0,0),(-1,0,0),(0,1,0),(0,-1,0),(0,0,1),(0,0,-1)]
 
-    visited = 0
     while queue:
         x, y, z = queue.popleft()
         d = dist[x, y, z]
@@ -224,13 +462,6 @@ def bfs_distance_field_3d(grid, goal_idx):
                 if not grid[nx2, ny2, nz2] and dist[nx2, ny2, nz2] == np.inf:
                     dist[nx2, ny2, nz2] = d + 1
                     queue.append((nx2, ny2, nz2))
-                    visited += 1
-
-    reachable = np.isfinite(dist).sum() - 1  # exclude goal itself
-    free_total = (~grid).sum()
-    print(f"  BFS visited {visited:,} voxels")
-    print(f"  Reachable from goal: {reachable:,} / {free_total:,} free voxels "
-          f"({100*reachable/max(free_total,1):.1f}%)")
 
     return dist
 
@@ -462,7 +693,7 @@ def save_for_training(grid, dist_fields, goals_world, origin, resolution, output
     """
     Save data in a format easy to load in your DirectRLEnv.
 
-    dist_fields: np.ndarray shape (num_goals, X, Y, Z), voxel-step counts (not meters).
+    dist_fields: np.ndarray shape (num_goals, X, Y, Z), Euclidean-approximated voxel distances (not meters).
     goals_world: np.ndarray shape (num_goals, 3), world-frame goal positions.
 
     In your env's __init__:
@@ -575,9 +806,9 @@ def main():
     grid = binary_dilation(grid, structure=structure)
     print(f"  Inflated obstacles by {r_voxels} voxels ({drone_radius}m drone radius)")
 
-    # ── BFS distance field ──
+    # ── Dijkstra distance field (26-connected) ──
     print("\n" + "=" * 60)
-    print("STEP 3: Computing BFS distance field")
+    print("STEP 3: Computing Dijkstra distance field (26-connected)")
     print("=" * 60)
 
     goals_world = np.array(args.goals)  # (num_goals, 3)
@@ -586,7 +817,7 @@ def main():
         goal_idx = np.round((goal_world - origin) / res).astype(int)
         goal_idx = np.clip(goal_idx, 0, np.array(grid.shape) - 1)
         print(f"  Goal {i} world: {goal_world}  voxel: {goal_idx}")
-        dist_fields.append(bfs_distance_field_3d(grid, tuple(goal_idx)))
+        dist_fields.append(dijkstra_distance_field_3d(grid, tuple(goal_idx)))
     dist_fields = np.stack(dist_fields)  # (num_goals, X, Y, Z)
     # Use first goal for visualizations
     goal_world = goals_world[0]
