@@ -11,7 +11,7 @@ from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
 from isaaclab.markers import VisualizationMarkers
 from isaaclab.sensors import ContactSensor
-from isaaclab.utils.math import subtract_frame_transforms
+from isaaclab.utils.math import quat_apply_yaw, subtract_frame_transforms
 
 from isaaclab.markers import CUBOID_MARKER_CFG  # isort: skip
 
@@ -106,6 +106,35 @@ def _subsample_path(path: np.ndarray, spacing: float) -> np.ndarray:
     return np.array(result)
 
 
+# ── Chase Camera ─────────────────────────────────────────────────────────────
+
+from isaaclab.envs.ui import ViewportCameraController
+
+
+class ChaseCameraController(ViewportCameraController):
+    """Viewport camera that rotates eye/lookat offsets with the tracked asset's orientation."""
+
+    def _update_tracking_callback(self, event):
+        if self.cfg.origin_type != "asset_root" or self.cfg.asset_name is None:
+            super()._update_tracking_callback(event)
+            return
+
+        asset = self._env.scene[self.cfg.asset_name]
+        idx = self.cfg.env_index
+        # update origin to current robot position
+        self.viewer_origin = asset.data.root_pos_w[idx]
+        origin = self.viewer_origin.detach().cpu().numpy()
+
+        # rotate the static offsets by the robot's orientation
+        quat = asset.data.root_quat_w[idx].unsqueeze(0)  # (1, 4) wxyz
+        eye_t = torch.as_tensor(self.default_cam_eye, dtype=torch.float32, device=quat.device).unsqueeze(0)
+        lookat_t = torch.as_tensor(self.default_cam_lookat, dtype=torch.float32, device=quat.device).unsqueeze(0)
+
+        cam_eye = origin + quat_apply_yaw(quat, eye_t).squeeze(0).detach().cpu().numpy()
+        cam_target = origin + quat_apply_yaw(quat, lookat_t).squeeze(0).detach().cpu().numpy()
+        self._env.sim.set_camera_view(eye=cam_eye, target=cam_target)
+
+
 # ── Environment ──────────────────────────────────────────────────────────────
 
 class ObstacleNavDirectEnv(DirectRLEnv):
@@ -113,6 +142,12 @@ class ObstacleNavDirectEnv(DirectRLEnv):
 
     def __init__(self, cfg: ObstacleNavEnvCfg, render_mode: str | None = None, **kwargs) -> None:
         super().__init__(cfg=cfg, render_mode=render_mode, **kwargs)
+
+        # Replace the default camera controller with a chase camera that
+        # rotates the eye/lookat offsets with the drone's orientation.
+        if self.viewport_camera_controller is not None:
+            del self.viewport_camera_controller
+            self.viewport_camera_controller = ChaseCameraController(self, self.cfg.viewer)
 
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf,
@@ -129,7 +164,7 @@ class ObstacleNavDirectEnv(DirectRLEnv):
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
             for key in [
                 "lin_vel", "ang_vel", "path_progress", "goal_reached",
-                "tilt", "action_smoothness",
+                "tilt", "action_smoothness", "alive", "proximity",
             ]
         }
         self._goal_offsets = torch.tensor(
@@ -362,15 +397,29 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         ).clamp(-1.0, 1.0)
         self._prev_remaining = remaining.detach()
 
-        # 3. Penalties
+        # 3. Proximity penalty from ToF sensor ranges
+        proximity_penalty = torch.zeros(self.num_envs, device=self.device)
+        if self._lidar is not None:
+            ray_hits_w = self._lidar.data.ray_hits_w
+            lidar_origin_w = self._lidar.data.pos_w.unsqueeze(1)
+            lidar_ranges = torch.linalg.norm(ray_hits_w - lidar_origin_w, dim=-1)
+            min_range, _ = lidar_ranges.min(dim=-1)
+            # Smooth penalty: 1.0 when touching wall, 0.0 at safety distance
+            proximity_penalty = torch.clamp(
+                1.0 - min_range / self.cfg.obstacle_safety_distance, min=0.0
+            )
+
+        # 4. Penalties
         tilt_error = 1.0 + proj_grav[:, 2]
         lin_vel_sq = torch.sum(torch.square(lin_vel_b), dim=1)
         ang_vel_sq = torch.sum(torch.square(ang_vel_b), dim=1)
         action_diff_sq = torch.sum(torch.square(self._actions - self._previous_actions), dim=1)
 
         rewards = {
-            "path_progress": path_progress * self.cfg.distance_to_goal_reward_scale * dt,
+            "path_progress": path_progress * self.cfg.distance_to_goal_reward_scale,
             "goal_reached": goal_reached * self.cfg.goal_reached_bonus,
+            "alive": torch.full((self.num_envs,), self.cfg.alive_bonus * dt, device=self.device),
+            "proximity": proximity_penalty * self.cfg.obstacle_proximity_reward_scale * dt,
             "tilt": tilt_error * self.cfg.tilt_reward_scale * dt,
             "lin_vel": lin_vel_sq * self.cfg.lin_vel_reward_scale * dt,
             "ang_vel": ang_vel_sq * self.cfg.ang_vel_reward_scale * dt,

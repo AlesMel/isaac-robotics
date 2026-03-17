@@ -22,7 +22,7 @@ from .cfg import MULTI_RANGER_CFG, CRAZYFLIE_CFG, SensorSelectionCfg, LIDAR_CFG
 
 @configclass
 class ObstacleNavEnvCfg(DirectRLEnvCfg):
-    episode_length_s: float = 10.0
+    episode_length_s: float = 15.0
     decimation: int = 2
     action_space: int = 4
     observation_space: int = 12
@@ -30,10 +30,9 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
     debug_vis: bool = True
 
     viewer: ViewerCfg = ViewerCfg(
-        eye=(3.0, 3.0, 3.0),
-        lookat=(0.0, 0.0, 0.0),
+        eye=(-2.0, 0.0, 0.8),   # behind and above in drone's local frame
+        lookat=(3.0, 0.0, 0.0),  # looking ahead in drone's local frame
         origin_type="asset_root",
-        # origin_type="env",
         env_index=0,
         asset_name="robot",
     )
@@ -122,8 +121,11 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
     lin_vel_reward_scale: float = -0.04
     ang_vel_reward_scale: float = -0.05
     distance_to_goal_reward_scale: float = 16.0  # uses geodesic distance from voxel field
-    goal_reached_bonus: float = 5.0
+    goal_reached_bonus: float = 10.0
     goal_reached_threshold: float = 0.2
+    alive_bonus: float = 0.5  # small per-step reward for staying airborne
+    obstacle_proximity_reward_scale: float = -5.0  # smooth penalty near walls
+    obstacle_safety_distance: float = 1.0  # meters — full penalty at 0, zero at this distance
     # Stability
     tilt_reward_scale: float = -0.5
     action_smoothness_scale: float = -0.15
