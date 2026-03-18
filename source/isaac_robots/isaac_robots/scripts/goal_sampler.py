@@ -20,6 +20,7 @@ import math
 from collections import deque
 
 import numpy as np
+from scipy.ndimage import binary_dilation
 
 from .ring_obstacle import RingCfg
 
@@ -45,11 +46,13 @@ class OccupancyGrid:
     # --- coordinate helpers ---
 
     def _to_cell(self, x: float, y: float) -> tuple[int, int]:
+        """Convert world XY coordinates (env-local) to grid cell indices (i, j)."""
         ci = int((x + self._half) / self.res)
         cj = int((y + self._half) / self.res)
         return np.clip(ci, 0, self.n - 1), np.clip(cj, 0, self.n - 1)
 
     def _cell_center(self, ci: int, cj: int) -> tuple[float, float]:
+        """Convert grid cell indices back to world XY coordinates (env-local center of cell)."""
         x = -self._half + (ci + 0.5) * self.res
         y = -self._half + (cj + 0.5) * self.res
         return x, y
@@ -179,8 +182,6 @@ class OccupancyGrid:
         min_clearance_cells: erode obstacles slightly so goals aren't
         placed right against a wall.
         """
-        from scipy.ndimage import binary_dilation
-
         # inflate obstacles slightly for clearance
         inflated = binary_dilation(
             self.grid,
@@ -229,6 +230,13 @@ class GoalSampler:
         min_dist_from_spawn: float = 1.0,
         seed: int = 0,
     ):
+        """Precompute the set of valid goal cells reachable from spawn.
+
+        Tries clearances of 2, 1, and 0 grid cells (in that order) to find
+        reachable free space — looser clearance is used automatically when the
+        layout is very dense. Goals closer than min_dist_from_spawn to spawn
+        are excluded; if nothing remains, the full reachable set is used.
+        """
         self.grid = grid
         self.spawn_xy = (spawn_local[0], spawn_local[1])
         self.min_dist = min_dist_from_spawn

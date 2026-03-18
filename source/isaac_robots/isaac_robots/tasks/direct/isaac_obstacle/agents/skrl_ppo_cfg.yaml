@@ -61,7 +61,7 @@ agent:
   clip_predicted_values: True
   entropy_loss_scale: 0.01
   value_loss_scale: 2.0
-  kl_threshold: 0.0
+  kl_threshold: 0.0  # PPO early-stop threshold (0.0 = disabled); distinct from learning_rate_scheduler_kwargs.kl_threshold above
   rewards_shaper_scale: 0.1
   time_limit_bootstrap: True
   # logging and checkpoint
@@ -76,5 +76,5 @@ agent:
 # https://skrl.readthedocs.io/en/latest/api/trainers/sequential.html
 trainer:
   class: SequentialTrainer
-  timesteps: 100_000
+  timesteps: 1_000_000
   environment_info: log

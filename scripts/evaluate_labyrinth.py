@@ -36,8 +36,6 @@ args_cli.enable_cameras = False
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-"""Rest everything follows."""
-
 import csv
 import itertools
 import os
@@ -54,13 +52,7 @@ from isaaclab_rl.skrl import SkrlVecEnvWrapper
 import isaac_robots.tasks  # noqa: F401
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
-CHALLENGE_TO_TASK = {
-    "corridor": "Isaac-Robots-Corridor-Direct-v0",
-    "gate_slalom": "Isaac-Robots-GateSlalom-Direct-v0",
-    "pillar_forest": "Isaac-Robots-PillarForest-Direct-v0",
-    "vertical_layers": "Isaac-Robots-VerticalLayers-Direct-v0",
-    "room_maze": "Isaac-Robots-RoomMaze-Direct-v0",
-}
+from common import CHALLENGE_TO_TASK
 
 
 def evaluate_single(task_id: str, difficulty: float, checkpoint: str, num_envs: int,

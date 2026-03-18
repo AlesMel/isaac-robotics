@@ -81,7 +81,7 @@ def _ring_segment_specs(ring: RingCfg) -> list[
 
     # arc length per segment (chord approximation is fine for n>=8)
     arc_len = 2 * math.pi * r / n
-    seg_size = (arc_len * 1.05, ring.tube_radius * 2, ring.tube_radius * 2)
+    seg_size = (arc_len * 1.05, ring.tube_radius * 2, ring.tube_radius * 2)  # 1.05: 5% overlap so adjacent segments don't leave visible gaps
 
     for i in range(n):
         angle = 2 * math.pi * i / n
@@ -164,7 +164,7 @@ def spawn_ring(
     color = ring.color
     if color not in _RING_MATERIAL_CACHE:
         _RING_MATERIAL_CACHE[color] = sim_utils.PreviewSurfaceCfg(
-            diffuse_color=color, emissive_color=tuple(c * 0.15 for c in color)
+            diffuse_color=color, emissive_color=tuple(c * 0.15 for c in color)  # 0.15: subtle glow, avoids over-brightening the scene
         )
     mat = _RING_MATERIAL_CACHE[color]
 

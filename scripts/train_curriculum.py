@@ -15,13 +15,7 @@ import os
 import subprocess
 import sys
 
-CHALLENGE_TO_TASK = {
-    "corridor": "Isaac-Robots-Corridor-Direct-v0",
-    "gate_slalom": "Isaac-Robots-GateSlalom-Direct-v0",
-    "pillar_forest": "Isaac-Robots-PillarForest-Direct-v0",
-    "vertical_layers": "Isaac-Robots-VerticalLayers-Direct-v0",
-    "room_maze": "Isaac-Robots-RoomMaze-Direct-v0",
-}
+from common import CHALLENGE_TO_TASK
 
 
 def find_latest_checkpoint(log_root: str) -> str | None:
@@ -76,7 +70,7 @@ def main():
             f"--task={task}",
             f"--algorithm={args.algorithm}",
             f"--seed={args.seed}",
-            f"--max_iterations={args.timesteps_per_stage // 48}",  # approx: timesteps / rollouts
+            f"--max_iterations={args.timesteps_per_stage // 48}",  # approx: timesteps / (rollouts * decimation); 48 is a rough conversion factor
         ]
         if args.num_envs is not None:
             cmd.append(f"--num_envs={args.num_envs}")

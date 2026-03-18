@@ -132,10 +132,6 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
 
-        # if self.cfg.lidar is not None:
-        #     self._lidar = self.cfg.lidar.class_type(self.cfg.lidar)
-        #     self.scene.sensors["lidar"] = self._lidar
-        # else:
         self._lidar = None
 
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
@@ -153,7 +149,8 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self._actions = actions.clone().clamp(-1.0, 1.0)
         self._thrust[:, 0, 2] = self.cfg.thrust_to_weight * self._robot_weight * (self._actions[:, 0] + 1.0) / 2.0
         self._moment[:, 0, :] = self.cfg.moment_scale * self._actions[:, 1:]
-        print(f"Action sample: {self._actions[0].cpu().numpy()}, Thrust: {self._thrust[0, 0, 2].item():.3f} N, Moment: {self._moment[0, 0].cpu().numpy()} Nm")
+        logger.debug("Action sample: %s, Thrust: %.3f N, Moment: %s Nm",
+                     self._actions[0].cpu().numpy(), self._thrust[0, 0, 2].item(), self._moment[0, 0].cpu().numpy())
 
     def _apply_action(self) -> None:
         self._robot.permanent_wrench_composer.set_forces_and_torques(
@@ -249,7 +246,6 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         net_contact_forces = self._contact_sensor.data.net_forces_w_history
         died = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._body_id], dim=-1), dim=1)[0] > 1.0, dim=1)
-        #died = torch.logical_or(self._robot.data.root_pos_w[:, 2] < 0.0, self._robot.data.root_pos_w[:, 2] > 10.0)
         return died, time_out
     
     def _reset_idx(self, env_ids: torch.Tensor | None) -> None:
@@ -277,7 +273,6 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         final_geo = self._prev_geo_dist[env_ids]
         self.extras["log"]["Metrics/final_geo_dist"] = final_geo.nan_to_num(nan=0.0, posinf=0.0).mean().item()
 
-        #extras["Metrics/final_distance_to_goal"] = final_distance_to_goal.item()
         self.extras["log"].update(extras)
 
         self._robot.reset(env_ids)
@@ -302,54 +297,6 @@ class ObstacleNavDirectEnv(DirectRLEnv):
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
 
-        # Restore these variable resets in _reset_idx
-        # self._prev_geo_dist[env_ids] = float("inf")
-        # self._steps_without_progress[env_ids] = 0
-
-        # self._waypoints_w[env_ids] = self._terrain.env_origins[env_ids] + self._goal_offsets.unsqueeze(0)
-        # self._waypoint_idx[env_ids] = 0
-        # self._desired_pos_w[env_ids] = self._waypoints_w[env_ids, 0]
-
-        # # Spawn validity: check if robot's current (post-reset) voxel is occupied or unreachable
-        # spawn_local = self._robot.data.root_pos_w[env_ids] - self._env_origins[env_ids]
-        # spawn_idx = ((spawn_local - self._grid_origin) / self._grid_resolution).long()
-        # spawn_idx[:, 0] = spawn_idx[:, 0].clamp(0, self._grid_shape[0] - 1)
-        # spawn_idx[:, 1] = spawn_idx[:, 1].clamp(0, self._grid_shape[1] - 1)
-        # spawn_idx[:, 2] = spawn_idx[:, 2].clamp(0, self._grid_shape[2] - 1)
-        # spawn_occupied = self._occupancy[spawn_idx[:, 0], spawn_idx[:, 1], spawn_idx[:, 2]].float().mean().item()
-        # self.extras["log"]["Metrics/spawn_in_obstacle_frac"] = spawn_occupied
-        # spawn_geo = self._dist_fields[0, spawn_idx[:, 0], spawn_idx[:, 1], spawn_idx[:, 2]] * self._grid_resolution
-        # # -1.0 → unreachable (inf); 0 → at goal; positive → valid
-        # self.extras["log"]["Metrics/spawn_geo_dist"] = spawn_geo.nan_to_num(nan=0.0, posinf=-1.0).mean().item()
-
-        # self._prev_geo_dist[env_ids] = float("inf")
-
-        # self._waypoints_w[env_ids] = self._env_origins[env_ids].unsqueeze(1) + self._goal_offsets.unsqueeze(0)
-        # self._waypoint_idx[env_ids] = 0
-        # self._desired_pos_w[env_ids] = self._waypoints_w[env_ids, 0]
-
-        # spawn_pos_local = torch.tensor(self.cfg.robot.init_state.pos, device=self.device, dtype=default_root_state.dtype)
-        # default_root_state[:, :3] = self._env_origins[env_ids] + spawn_pos_local.unsqueeze(0)
-
-        # spawn_quat = torch.tensor(self.cfg.robot.init_state.rot, device=self.device, dtype=default_root_state.dtype)
-        # spawn_quat = spawn_quat / torch.linalg.norm(spawn_quat).clamp_min(1e-8)
-        # default_root_state[:, 3:7] = spawn_quat.unsqueeze(0)
-        # default_root_state[:, 7:13] = 0.0
-
-        # self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
-        # self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
-        # self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
-
-        # # Seed best-distance with spawn geodesic distance so stuck detection works from step 1
-        # spawn_local = default_root_state[:, :3] - self._env_origins[env_ids]
-        # spawn_idx = ((spawn_local - self._grid_origin) / self._grid_resolution).long()
-        # spawn_idx[:, 0] = spawn_idx[:, 0].clamp(0, self._grid_shape[0] - 1)
-        # spawn_idx[:, 1] = spawn_idx[:, 1].clamp(0, self._grid_shape[1] - 1)
-        # spawn_idx[:, 2] = spawn_idx[:, 2].clamp(0, self._grid_shape[2] - 1)
-        # spawn_wp_idx = self._waypoint_idx[env_ids]
-        # spawn_geo = self._dist_fields[spawn_wp_idx, spawn_idx[:, 0], spawn_idx[:, 1], spawn_idx[:, 2]] * self._grid_resolution
-        # self._best_distance_to_goal[env_ids] = spawn_geo
-
     def _set_debug_vis_impl(self, debug_vis: bool):
         if debug_vis:
             if not hasattr(self, "goal_pos_visualizer"):
@@ -366,4 +313,3 @@ class ObstacleNavDirectEnv(DirectRLEnv):
 
     def _debug_vis_callback(self, event):
         self.goal_pos_visualizer.visualize(self._desired_pos_w)
-        #self._waypoint_markers.visualize(self._waypoints_w.view(-1, 3))

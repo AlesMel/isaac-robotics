@@ -8,7 +8,6 @@ from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.envs import ViewerCfg
-from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 from isaaclab.markers import VisualizationMarkersCfg
 
 from .cfg import MULTI_RANGER_CFG, CRAZYFLIE_CFG, SensorSelectionCfg
@@ -98,13 +97,9 @@ class ObstacleNavEnvCfg(DirectRLEnvCfg):
         },
     )
 
-    # lidar = LIDAR_CFG.replace(
-    #     prim_path="/World/envs/env_.*/Robot/body",
-    # )
     lidar = MULTI_RANGER_CFG.replace(
         prim_path="/World/envs/env_.*/Robot/body",
     )
-    # lidar.mesh_prim_paths = ["/World/envs/env_.*/Obstacle_0", "/World/envs/env_.*/Obstacle_1"]
 
     thrust_to_weight: float = 1.9
     moment_scale: float = 0.01
