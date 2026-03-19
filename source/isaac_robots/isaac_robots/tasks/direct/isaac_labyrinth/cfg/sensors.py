@@ -37,6 +37,9 @@ class SensorSelectionCfg:
     lidar_channels: int = _LIDAR_CHANNELS
     lidar_horizontal_rays: int = _LIDAR_H_RAYS
     lidar_max_distance_m: float = 4.0
+    # HM01B0 native resolution (window mode)
+    camera_width: int = 324
+    camera_height: int = 244
 
     @property
     def lidar_scan_shape(self) -> tuple[int, int]:
@@ -45,3 +48,8 @@ class SensorSelectionCfg:
     @property
     def lidar_flat_dim(self) -> int:
         return self.lidar_channels * self.lidar_horizontal_rays
+
+    @property
+    def camera_flat_dim(self) -> int:
+        """Flattened grayscale image size (single channel)."""
+        return self.camera_width * self.camera_height

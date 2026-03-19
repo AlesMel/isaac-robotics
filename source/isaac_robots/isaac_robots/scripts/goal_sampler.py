@@ -323,54 +323,25 @@ class GoalSampler:
     def sample_ring_waypoints(
         self,
         rings: list[RingCfg],
-        approach_dist: float = 0.8,
-        exit_dist: float = 0.8,
     ) -> np.ndarray:
         """
-        Generate waypoints that guide the drone through each ring.
+        Generate one waypoint per ring: the ring center.
 
-        For each ring produces 3 waypoints:
-          1. approach — in front of the ring
-          2. center   — at the ring opening
-          3. exit     — past the ring
-
-        Returns (n_rings * 3, 3) array of env-local positions, ordered
-        so the drone visits ring_0 approach → center → exit → ring_1 ...
+        Returns (n_rings, 3) array of env-local positions.
         """
-        goals = []
-        for ring in rings:
-            cx, cy, cz = ring.pos
-            yaw = math.radians(ring.yaw_deg)
-            # ring face normal in XY (perpendicular to the ring plane)
-            nx = -math.sin(yaw)
-            ny = math.cos(yaw)
-
-            # approach (before ring)
-            goals.append((
-                cx + nx * approach_dist,
-                cy + ny * approach_dist,
-                cz,
-            ))
-            # center (inside ring opening)
-            goals.append((cx, cy, cz))
-            # exit (past ring)
-            goals.append((
-                cx - nx * exit_dist,
-                cy - ny * exit_dist,
-                cz,
-            ))
-
-        return np.array(goals)
+        goals = [(ring.pos[0], ring.pos[1], ring.pos[2]) for ring in rings]
+        if not goals:
+            return np.zeros((0, 3), dtype=np.float32)
+        return np.array(goals, dtype=np.float32)
 
     def compute_waypoint_distance_fields(
-        self, rings: list[RingCfg], approach_dist: float = 0.8, exit_dist: float = 0.8,
+        self, rings: list[RingCfg],
     ) -> np.ndarray:
-        """Compute a 2-D Dijkstra distance field for each ring waypoint.
+        """Compute a 2-D Dijkstra distance field for each ring center.
 
-        Returns ``(n_waypoints, grid_n, grid_n)`` float32 array in metres,
-        where ``n_waypoints = len(rings) * 3``.
+        Returns ``(n_rings, grid_n, grid_n)`` float32 array in metres.
         """
-        waypoints = self.sample_ring_waypoints(rings, approach_dist, exit_dist)
+        waypoints = self.sample_ring_waypoints(rings)
         fields = np.stack([
             self.grid.compute_distance_field((wp[0], wp[1]))
             for wp in waypoints

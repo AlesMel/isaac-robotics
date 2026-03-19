@@ -7,8 +7,8 @@ from gymnasium import spaces
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
-from isaaclab.markers import VisualizationMarkers
-from isaaclab.sensors import ContactSensor
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+from isaaclab.sensors import ContactSensor, TiledCamera
 from isaaclab.utils.math import subtract_frame_transforms
 from isaaclab.markers import CUBOID_MARKER_CFG
 
@@ -34,26 +34,44 @@ class LabyrinthDirectEnv(DirectRLEnv):
         self._thrust = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._moment = torch.zeros(self.num_envs, 1, 3, device=self.device)
 
-        # Goal tracking: ring waypoints (approach -> center -> exit per ring)
-        n_waypoints = len(self._labyrinth.rings_env0) * 3
-        self._n_waypoints = max(n_waypoints, 1)
+        # ── Multi-layout setup ────────────────────────────────────────────────
+        n_layouts = self.cfg.labyrinth.n_layouts
+        self._env_layout_id = torch.arange(self.num_envs, device=self.device) % n_layouts
+
+        # Canonical ring count (same for every layout)
+        canonical_n_rings = len(self._labyrinth._rings_per_layout[0])
+        self._n_waypoints = max(canonical_n_rings, 1)
         self._waypoints_w = torch.zeros(self.num_envs, self._n_waypoints, 3, device=self.device)
         self._waypoint_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
 
-        # Precompute ring waypoints (env-local, same for all envs)
-        ring_wp = self._goal_sampler.sample_ring_waypoints(self._labyrinth.rings_env0)
-        self._ring_waypoints_local = torch.tensor(ring_wp, dtype=torch.float32, device=self.device)
-
-        # Geodesic distance fields (one per waypoint)
-        dist_fields_np = self._goal_sampler.compute_waypoint_distance_fields(
-            self._labyrinth.rings_env0,
+        # Per-layout ring waypoints: (n_layouts, n_wp, 3)
+        wp_list = [
+            self._labyrinth._goal_samplers[k].sample_ring_waypoints(
+                self._labyrinth._rings_per_layout[k]
+            )
+            for k in range(n_layouts)
+        ]
+        self._ring_waypoints_per_layout = torch.tensor(
+            np.stack(wp_list, axis=0), dtype=torch.float32, device=self.device
         )
-        self._dist_fields = torch.tensor(dist_fields_np, dtype=torch.float32, device=self.device)
-        grid = self._goal_sampler.grid
+
+        # Per-layout geodesic distance fields: (n_layouts, n_wp, grid_n, grid_n)
+        grid = self._labyrinth._goal_samplers[0].grid
         self._grid_half = grid._half
         self._grid_res = grid.res
         self._grid_n = grid.n
+        df_list = [
+            self._labyrinth._goal_samplers[k].compute_waypoint_distance_fields(
+                self._labyrinth._rings_per_layout[k]
+            )
+            if self._labyrinth._rings_per_layout[k]
+            else np.zeros((1, grid.n, grid.n), dtype=np.float32)
+            for k in range(n_layouts)
+        ]
+        self._dist_fields = torch.tensor(
+            np.stack(df_list, axis=0), dtype=torch.float32, device=self.device
+        )
         self._prev_remaining = torch.full((self.num_envs,), float("inf"), device=self.device)
 
         # Episode tracking
@@ -76,14 +94,32 @@ class LabyrinthDirectEnv(DirectRLEnv):
             (self.num_envs,), self._robot_weight_scalar, device=self.device,
         )
 
+        # Lidar range cache (computed once in _get_rewards, reused in _get_observations)
+        self._lidar_ranges_raw: torch.Tensor | None = None
+
         # Grace period after reset (for contact termination)
         self._reset_grace_steps_remaining = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._reset_grace_duration = int(
             self.cfg.grace_seconds / (self.cfg.decimation * self.cfg.sim.dt)
         )
 
-        # Visualization
-        self._waypoint_markers = VisualizationMarkers(self.cfg.waypoint_markers)
+        # Visualization: one sphere per waypoint slot, green (first) → red (last).
+        n_wp = self._n_waypoints
+        gradient_markers = {}
+        for i in range(n_wp):
+            t = i / max(n_wp - 1, 1)   # 0.0 (first) → 1.0 (last)
+            gradient_markers[f"wp_{i:03d}"] = sim_utils.SphereCfg(
+                radius=0.05,
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(t, 1.0 - t, 0.0),   # green → red
+                ),
+            )
+        self._waypoint_markers = VisualizationMarkers(
+            VisualizationMarkersCfg(
+                prim_path="/Visuals/ring_waypoints",
+                markers=gradient_markers,
+            )
+        )
         self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self) -> None:
@@ -101,6 +137,13 @@ class LabyrinthDirectEnv(DirectRLEnv):
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
         self.scene.sensors["contact_sensor"] = self._contact_sensor
 
+        # Crazyflie AI bundle HM01B0 monochrome camera (optional)
+        if self.cfg.camera is not None:
+            self._camera = TiledCamera(self.cfg.camera)
+            self.scene.sensors["camera"] = self._camera
+        else:
+            self._camera = None
+
         # Terrain
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
@@ -114,6 +157,13 @@ class LabyrinthDirectEnv(DirectRLEnv):
 
         # Clone environments
         self.scene.clone_environments(copy_from_source=True)
+
+        # Reposition prims for non-zero layouts BEFORE sim.reset() initializes PhysX.
+        # USD changes made after sim.reset() are not picked up by the physics engine.
+        if self.cfg.labyrinth.n_layouts > 1:
+            self._labyrinth.apply_layouts_to_envs(
+                self.scene.cfg.num_envs, self._env_origins
+            )
 
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
@@ -153,9 +203,13 @@ class LabyrinthDirectEnv(DirectRLEnv):
             desired_pos_b,
         ]
         if self._lidar is not None:
-            ray_hits_w = self._lidar.data.ray_hits_w
-            lidar_origin_w = self._lidar.data.pos_w.unsqueeze(1)
-            lidar_ranges = torch.linalg.norm(ray_hits_w - lidar_origin_w, dim=-1)
+            # Reuse ranges cached by _get_rewards (called first in the step loop).
+            # Fall back to computing fresh only on the very first observation call.
+            if self._lidar_ranges_raw is None:
+                ray_hits_w = self._lidar.data.ray_hits_w
+                lidar_origin_w = self._lidar.data.pos_w.unsqueeze(1)
+                self._lidar_ranges_raw = torch.linalg.norm(ray_hits_w - lidar_origin_w, dim=-1)
+            lidar_ranges = self._lidar_ranges_raw.clone()
             # Domain randomization: sensor noise (raw metres, before normalization)
             if self.cfg.domain_rand.sensor_noise_std > 0:
                 noise = torch.randn_like(lidar_ranges) * self.cfg.domain_rand.sensor_noise_std
@@ -165,6 +219,16 @@ class LabyrinthDirectEnv(DirectRLEnv):
             lidar_ranges.nan_to_num_(nan=1.0, posinf=1.0, neginf=0.0)
             lidar_ranges.clamp_(0.0, 1.0)
             obs_parts.append(lidar_ranges.reshape(self.num_envs, -1))
+
+        if self._camera is not None:
+            # RGB output: (num_envs, H, W, 4) uint8 (RGBA) — drop alpha, convert to grayscale.
+            rgba = self._camera.data.output["rgb"]  # (N, H, W, 4)
+            gray = (
+                0.299 * rgba[..., 0].float()
+                + 0.587 * rgba[..., 1].float()
+                + 0.114 * rgba[..., 2].float()
+            ) / 255.0  # normalise to [0, 1]
+            obs_parts.append(gray.reshape(self.num_envs, -1))
 
         return {"policy": torch.cat(obs_parts, dim=-1)}
 
@@ -178,8 +242,8 @@ class LabyrinthDirectEnv(DirectRLEnv):
         # Convert to grid cell indices
         ci = ((local_xy[:, 0] + self._grid_half) / self._grid_res).long().clamp(0, self._grid_n - 1)
         cj = ((local_xy[:, 1] + self._grid_half) / self._grid_res).long().clamp(0, self._grid_n - 1)
-        # Gather from per-waypoint distance fields
-        return self._dist_fields[self._waypoint_idx, ci, cj]
+        # Gather from per-layout, per-waypoint distance fields
+        return self._dist_fields[self._env_layout_id, self._waypoint_idx, ci, cj]
 
     # ── rewards ──────────────────────────────────────────────────────────────
 
@@ -219,8 +283,8 @@ class LabyrinthDirectEnv(DirectRLEnv):
         if self._lidar is not None:
             ray_hits_w = self._lidar.data.ray_hits_w
             lidar_origin_w = self._lidar.data.pos_w.unsqueeze(1)
-            lidar_ranges = torch.linalg.norm(ray_hits_w - lidar_origin_w, dim=-1)
-            min_range, _ = lidar_ranges.min(dim=-1)
+            self._lidar_ranges_raw = torch.linalg.norm(ray_hits_w - lidar_origin_w, dim=-1)
+            min_range, _ = self._lidar_ranges_raw.min(dim=-1)
             proximity_penalty = torch.clamp(
                 1.0 - min_range / self.cfg.wall_danger_distance, min=0.0,
             )
@@ -234,7 +298,7 @@ class LabyrinthDirectEnv(DirectRLEnv):
         rewards = {
             "path_progress": path_progress * self.cfg.distance_to_goal_reward_scale,
             "goal_reached": goal_reached * self.cfg.goal_reached_bonus,
-            "alive": torch.full((self.num_envs,), self.cfg.alive_bonus * dt, device=self.device),
+            "alive": (torch.linalg.norm(lin_vel_b, dim=1) > self.cfg.alive_bonus_min_speed).float() * self.cfg.alive_bonus * dt,
             "proximity": proximity_penalty * self.cfg.wall_proximity_reward_scale * dt,
             "tilt": tilt_error * self.cfg.tilt_reward_scale * dt,
             "lin_vel": lin_vel_sq * self.cfg.lin_vel_reward_scale * dt,
@@ -257,7 +321,11 @@ class LabyrinthDirectEnv(DirectRLEnv):
 
         # Height bounds
         too_low = self._robot.data.root_pos_w[:, 2] < 0.1
-        too_high = self._robot.data.root_pos_w[:, 2] > self.cfg.labyrinth.wall_height + 0.5
+        too_high = self._robot.data.root_pos_w[:, 2] > self.cfg.labyrinth.wall_height - 0.05
+
+        # XY out-of-bounds (safety net — perimeter walls should prevent this)
+        local_pos_xy = self._robot.data.root_pos_w[:, :2] - self._env_origins[:, :2]
+        out_of_bounds = (local_pos_xy.abs() > self.cfg.labyrinth.size / 2).any(dim=1)
 
         # Contact termination with grace period
         net_contact_forces = self._contact_sensor.data.net_forces_w_history
@@ -269,7 +337,7 @@ class LabyrinthDirectEnv(DirectRLEnv):
         grace_active = self._reset_grace_steps_remaining > 0
         self._reset_grace_steps_remaining[grace_active] -= 1
 
-        died = too_low | too_high | (collision & ~grace_active)
+        died = too_low | too_high | out_of_bounds | (collision & ~grace_active)
         return died, time_out
 
     # ── reset ────────────────────────────────────────────────────────────────
@@ -279,12 +347,28 @@ class LabyrinthDirectEnv(DirectRLEnv):
             env_ids = self._robot._ALL_INDICES
 
         # ── Logging ──
-        final_distance_to_goal = torch.linalg.norm(
-            self._desired_pos_w[env_ids] - self._robot.data.root_pos_w[env_ids], dim=1
-        ).mean()
-        rings_completed = (self._waypoint_idx[env_ids] // 3).float().mean()
         n_resetting = len(env_ids)
-        success_count = self._full_loop_completed[env_ids].sum().item()
+        final_rem = self._prev_remaining[env_ids]
+
+        # Batch all GPU→CPU scalar transfers into a single operation.
+        scalars_gpu = torch.stack([
+            torch.linalg.norm(self._desired_pos_w[env_ids] - self._robot.data.root_pos_w[env_ids], dim=1).mean(),
+            self._waypoint_idx[env_ids].float().mean(),
+            self._full_loop_completed[env_ids].sum().float(),
+            torch.count_nonzero(self.reset_terminated[env_ids]).float(),
+            torch.count_nonzero(self.reset_time_outs[env_ids]).float(),
+            final_rem.nan_to_num(nan=0.0, posinf=0.0).mean(),
+            self.episode_length_buf[env_ids].float().mean(),
+        ])
+        (
+            final_distance_to_goal,
+            rings_completed,
+            success_count,
+            n_collision,
+            n_timeout,
+            path_remaining,
+            ep_len,
+        ) = scalars_gpu.cpu().tolist()
 
         extras = {}
         for key in self._episode_sums:
@@ -294,22 +378,13 @@ class LabyrinthDirectEnv(DirectRLEnv):
 
         self.extras["log"] = {}
         self.extras["log"].update(extras)
-        self.extras["log"]["Episode_Termination/collision"] = torch.count_nonzero(
-            self.reset_terminated[env_ids]
-        ).item()
-        self.extras["log"]["Episode_Termination/time_out"] = torch.count_nonzero(
-            self.reset_time_outs[env_ids]
-        ).item()
-        self.extras["log"]["Metrics/final_distance_to_goal"] = final_distance_to_goal.item()
-        final_rem = self._prev_remaining[env_ids]
-        self.extras["log"]["Metrics/final_path_remaining"] = (
-            final_rem.nan_to_num(nan=0.0, posinf=0.0).mean().item()
-        )
-        self.extras["log"]["Metrics/rings_completed"] = rings_completed.item()
+        self.extras["log"]["Episode_Termination/collision"] = n_collision
+        self.extras["log"]["Episode_Termination/time_out"] = n_timeout
+        self.extras["log"]["Metrics/final_distance_to_goal"] = final_distance_to_goal
+        self.extras["log"]["Metrics/final_path_remaining"] = path_remaining
+        self.extras["log"]["Metrics/rings_completed"] = rings_completed
         self.extras["log"]["Metrics/success_rate"] = success_count / max(n_resetting, 1)
-        self.extras["log"]["Metrics/episode_length"] = (
-            self.episode_length_buf[env_ids].float().mean().item()
-        )
+        self.extras["log"]["Metrics/episode_length"] = ep_len
 
         # ── Reset ──
         self._robot.reset(env_ids)
@@ -330,10 +405,11 @@ class LabyrinthDirectEnv(DirectRLEnv):
         self._prev_remaining[env_ids] = float("inf")
         self._full_loop_completed[env_ids] = False
 
-        # Set ring waypoints in world frame (env_origin + local waypoints)
+        # Set ring waypoints in world frame using per-env layout assignment
         origins = self._env_origins[env_ids]  # (B, 3)
-        for i in range(self._n_waypoints):
-            self._waypoints_w[env_ids, i] = origins + self._ring_waypoints_local[i]
+        layout_ids = self._env_layout_id[env_ids]                          # (B,)
+        wp_local = self._ring_waypoints_per_layout[layout_ids]             # (B, n_wp, 3)
+        self._waypoints_w[env_ids] = origins.unsqueeze(1) + wp_local
 
         self._waypoint_idx[env_ids] = 0
         self._desired_pos_w[env_ids] = self._waypoints_w[env_ids, 0]
@@ -375,4 +451,12 @@ class LabyrinthDirectEnv(DirectRLEnv):
 
     def _debug_vis_callback(self, event):
         self.goal_pos_visualizer.visualize(self._desired_pos_w)
-        self._waypoint_markers.visualize(self._waypoints_w.view(-1, 3))
+        # Each env's n_waypoints positions get indices 0..n-1 so the gradient
+        # colors correctly reflect position in the sequence across all envs.
+        marker_indices = torch.arange(
+            self._n_waypoints, device=self.device
+        ).repeat(self.num_envs)
+        self._waypoint_markers.visualize(
+            self._waypoints_w.view(-1, 3),
+            marker_indices=marker_indices,
+        )
