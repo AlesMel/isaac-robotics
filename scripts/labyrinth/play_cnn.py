@@ -4,7 +4,7 @@ Drop-in replacement for scripts/skrl/play.py that manually instantiates
 NatureCnnPolicy + MlpCritic instead of going through SKRL's Runner.
 
 Usage:
-    python scripts/skrl/play_labyrinth.py \\
+    python scripts/labyrinth/play_cnn.py \\
         --task Isaac-Labyrinth-Direct-v0 \\
         --checkpoint logs/skrl/labyrinth_direct/<run>/checkpoints/best_agent.pt \\
         --num_envs 1

@@ -3,8 +3,8 @@
 Workaround for RTX 5080 (Blackwell) crash in the standard play.py.
 
 Usage:
-    python scripts/play_labyrinth.py --task Isaac-Robots-Corridor-Direct-v0 --checkpoint <path>
-    python scripts/play_labyrinth.py --task Isaac-Robots-Corridor-Direct-v0  # auto-find latest
+    python scripts/labyrinth/play_tof.py --task Isaac-Robots-Labyrinth-Direct-v0 --checkpoint <path>
+    python scripts/labyrinth/play_tof.py --task Isaac-Robots-Labyrinth-Direct-v0  # auto-find latest
 """
 
 import argparse

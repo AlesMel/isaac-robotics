@@ -15,7 +15,7 @@ DEFAULT_CRAZYFLIE_USD = os.getenv(
 CRAZYFLIE_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/Bitcraze/Crazyflie/cf2x.usd",#DEFAULT_CRAZYFLIE_USD,
+        usd_path=DEFAULT_CRAZYFLIE_USD,
         activate_contact_sensors=True,
         copy_from_source=False,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -32,7 +32,7 @@ CRAZYFLIE_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(1.0, -.5, 0.3),
+        pos=(0.0, 0.0, 0.5),
         joint_pos={".*": 0.0},
         joint_vel={
             "m1_joint": 200.0,

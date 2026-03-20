@@ -4,9 +4,9 @@ Chains training runs at increasing difficulty levels, loading the previous
 checkpoint as starting weights for each new stage.
 
 Usage:
-    python scripts/train_curriculum.py --challenge corridor --num_envs 4096
-    python scripts/train_curriculum.py --challenge room_maze --difficulties 0.3 0.5 0.7 0.9
-    python scripts/train_curriculum.py --challenge pillar_forest --timesteps-per-stage 2000000
+    python scripts/labyrinth/train_curriculum.py --challenge corridor --num_envs 4096
+    python scripts/labyrinth/train_curriculum.py --challenge room_maze --difficulties 0.3 0.5 0.7 0.9
+    python scripts/labyrinth/train_curriculum.py --challenge pillar_forest --timesteps-per-stage 2000000
 """
 
 import argparse

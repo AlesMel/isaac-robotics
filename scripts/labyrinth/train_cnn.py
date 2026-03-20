@@ -8,7 +8,7 @@ Asymmetric architecture:
   - Critic: MLP on privileged state (goal, vel, geodesic, obstacle dist) → value
 
 Usage (same flags as train.py):
-    python scripts/skrl/train_labyrinth.py \\
+    python scripts/labyrinth/train_cnn.py \\
         --task Isaac-Labyrinth-Direct-v0  \\
         --num_envs 512                    \\  # 512 recommended when camera is ON
         --headless

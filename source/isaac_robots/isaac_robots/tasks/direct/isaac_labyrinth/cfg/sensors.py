@@ -4,7 +4,7 @@ import math
 
 from isaaclab.sensors import MultiMeshRayCasterCfg, RayCasterCfg, patterns
 from isaaclab.utils import configclass
-from .tof_pattern import CrazyflieToFPatternCfg
+from .._shared.tof_pattern import CrazyflieToFPatternCfg
 
 MULTI_RANGER_CFG = MultiMeshRayCasterCfg(
     prim_path="{ENV_REGEX_NS}/Robot/body",

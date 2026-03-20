@@ -3,9 +3,9 @@
 Runs N episodes per (challenge, difficulty) pair and reports a summary table.
 
 Usage:
-    python scripts/evaluate_labyrinth.py --checkpoint /path/to/best_agent.pt
-    python scripts/evaluate_labyrinth.py --checkpoint /path/to/best_agent.pt --challenges corridor gate_slalom
-    python scripts/evaluate_labyrinth.py --checkpoint /path/to/best_agent.pt --difficulties 0.3 0.5 0.7 --csv results.csv
+    python scripts/labyrinth/evaluate.py --checkpoint /path/to/best_agent.pt
+    python scripts/labyrinth/evaluate.py --checkpoint /path/to/best_agent.pt --challenges corridor gate_slalom
+    python scripts/labyrinth/evaluate.py --checkpoint /path/to/best_agent.pt --difficulties 0.3 0.5 0.7 --csv results.csv
 """
 
 import argparse

@@ -1,8 +1,8 @@
 """Standalone viewer for the procedural labyrinth generator.
 
 Usage:
-    python scripts/view_labyrinth.py --challenge corridor --difficulty 0.5
-    python scripts/view_labyrinth.py --challenge pillar_forest --difficulty 0.8 --size 8
+    python scripts/labyrinth/view.py --challenge corridor --difficulty 0.5
+    python scripts/labyrinth/view.py --challenge pillar_forest --difficulty 0.8 --size 8
 """
 
 import argparse
