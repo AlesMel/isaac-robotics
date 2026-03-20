@@ -1,5 +1,11 @@
 seed: 42
 
+# ── Models ────────────────────────────────────────────────────────────────────
+# NOTE: the model architecture (CNN+MLP) is defined in
+#   agents/cnn_mlp_model.py  and instantiated by  scripts/skrl/train_labyrinth.py
+# which bypasses the YAML runner for model creation.
+# The class names below are kept for compatibility with the generic train.py
+# (no-camera, flat-MLP fallback only).
 models:
   separate: False
   policy:
@@ -29,6 +35,7 @@ memory:
   class: RandomMemory
   memory_size: -1
 
+# ── Agent ─────────────────────────────────────────────────────────────────────
 agent:
   class: PPO
   rollouts: 48

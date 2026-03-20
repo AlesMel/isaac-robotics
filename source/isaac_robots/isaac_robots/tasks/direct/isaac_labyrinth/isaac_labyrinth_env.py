@@ -22,9 +22,18 @@ class LabyrinthDirectEnv(DirectRLEnv):
     def __init__(self, cfg: LabyrinthEnvCfg, render_mode: str | None = None, **kwargs) -> None:
         super().__init__(cfg=cfg, render_mode=render_mode, **kwargs)
 
+        # Recompute obs dim from actual cfg — cfg.observation_space may be stale
+        # if camera was set on the cfg after __post_init__ ran (which only saw camera=None).
+        _obs_dim = 12
+        if self.cfg.lidar is not None:
+            _obs_dim += self.cfg.sensor_selection.lidar_flat_dim
+        if self.cfg.camera is not None:
+            _obs_dim += self.cfg.camera.width * self.cfg.camera.height
+        # Keep cfg.observation_space (int) in sync so base-class internals see the right value.
+        self.cfg.observation_space = _obs_dim
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf,
-            shape=(self.cfg.observation_space,), dtype=np.float32,
+            shape=(_obs_dim,), dtype=np.float32,
         )
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
 

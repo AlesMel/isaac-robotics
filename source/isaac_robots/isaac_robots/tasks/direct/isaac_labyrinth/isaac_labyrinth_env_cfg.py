@@ -86,14 +86,11 @@ class LabyrinthEnvCfg(DirectRLEnvCfg):
         n_layouts=64,  # set equal to num_envs for a unique layout per env
     )
 
-    # Sensors
-    sensor_selection: SensorSelectionCfg = SensorSelectionCfg(enable_lidar=True)
+    # Sensors — set camera = CRAZYFLIE_AI_CAMERA_CFG.replace(...) to enable the camera.
+    sensor_selection: SensorSelectionCfg = SensorSelectionCfg()
     lidar = MULTI_RANGER_CFG.replace(
         prim_path="/World/envs/env_.*/Robot/body",
     )
-    # Crazyflie AI bundle HM01B0 monochrome camera (disabled by default).
-    # Enable by setting sensor_selection.enable_camera = True and assigning
-    # camera = CRAZYFLIE_AI_CAMERA_CFG (or a .replace(...) of it).
     camera: TiledCameraCfg | None = None
     contact_sensor: ContactSensorCfg = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/body",
@@ -130,14 +127,15 @@ class LabyrinthEnvCfg(DirectRLEnvCfg):
         self.sim.render_interval = self.decimation
         self.terrain.num_envs = self.scene.num_envs
         self.terrain.env_spacing = self.scene.env_spacing
-        if self.sensor_selection.enable_lidar:
+        if self.lidar is not None:
             self.observation_space = 12 + self.sensor_selection.lidar_flat_dim
-        if self.sensor_selection.enable_camera and self.camera is not None:
-            self.observation_space += self.sensor_selection.camera_flat_dim
+        if self.camera is not None:
+            self.observation_space += self.camera.width * self.camera.height
             if self.scene.num_envs > 512:
                 import warnings
                 warnings.warn(
-                    f"Camera is enabled at 324x244 with {self.scene.num_envs} envs. "
+                    f"Camera is enabled at {self.camera.width}x{self.camera.height} "
+                    f"with {self.scene.num_envs} envs. "
                     "This may exceed GPU memory. Consider setting num_envs <= 512.",
                     stacklevel=2,
                 )
