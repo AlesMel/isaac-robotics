@@ -69,3 +69,6 @@ tests/
 
 # Docker history
 .isaac-lab-docker-history
+
+# Generated visualizations
+bfs_path_3d.html

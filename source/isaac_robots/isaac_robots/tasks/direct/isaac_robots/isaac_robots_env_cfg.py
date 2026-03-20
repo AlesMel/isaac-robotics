@@ -6,7 +6,7 @@ from gymnasium import spaces
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, ArticulationCfg
-from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
+from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg, ViewerCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
@@ -24,6 +24,14 @@ class CrazyflieEnvCfg(DirectRLEnvCfg):
     observation_space: int = 12
     state_space: int = 0
     debug_vis = True
+
+    viewer: ViewerCfg = ViewerCfg(
+        eye=(5.0, 5.0, 5.0),
+        lookat=(0.0, 0.0, 0.5),
+        origin_type="env",
+        env_index=0,
+        asset_name=None,
+    )
 
     sim: SimulationCfg = SimulationCfg(
         dt=1 / 100,
