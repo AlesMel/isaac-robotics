@@ -1,13 +1,13 @@
 seed: 42
 
 # ── Models ────────────────────────────────────────────────────────────────────
-# NOTE: the model architecture (CNN+MLP) is defined in
+# NOTE: the actual model architecture (NatureCnnPolicy + MlpCritic) is defined in
 #   agents/cnn_mlp_model.py  and instantiated by  scripts/skrl/train_labyrinth.py
 # which bypasses the YAML runner for model creation.
-# The class names below are kept for compatibility with the generic train.py
-# (no-camera, flat-MLP fallback only).
+# Asymmetric actor-critic: actor sees stacked images + proprio,
+# critic sees privileged state (goal, vel, geodesic, obstacle dist).
 models:
-  separate: False
+  separate: True
   policy:
     class: GaussianMixin
     clip_actions: False
@@ -26,9 +26,9 @@ models:
     clip_actions: False
     network:
       - name: net
-        input: OBSERVATIONS
-        layers: [256, 256, 128]
-        activations: tanh
+        input: STATES
+        layers: [256, 256]
+        activations: elu
     output: ONE
 
 memory:
@@ -47,6 +47,8 @@ agent:
   learning_rate_scheduler: KLAdaptiveLR
   learning_rate_scheduler_kwargs:
     kl_threshold: 0.008
+  observation_preprocessor: null
+  observation_preprocessor_kwargs: null
   state_preprocessor: RunningStandardScaler
   state_preprocessor_kwargs: null
   value_preprocessor: RunningStandardScaler

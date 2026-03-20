@@ -1,17 +1,16 @@
-"""Train the Isaac Labyrinth task with the CNN+MLP actor-critic.
+"""Train the Isaac Labyrinth task with asymmetric actor-critic.
 
 Drop-in replacement for scripts/skrl/train.py that bypasses SKRL's YAML
-model builder (which only supports its own built-in mixin names) and instead
-directly instantiates CnnMlpSharedModel.
+model builder and directly instantiates NatureCnnPolicy + MlpCritic.
 
-The model auto-detects whether camera observations are present:
-  - Camera ON  (obs = 18 + 79 056 dims): CNN encoder → MLP trunk → actor/critic heads
-  - Camera OFF (obs = 18 dims):          MLP trunk only → actor/critic heads
+Asymmetric architecture:
+  - Actor:  NatureCNN on 64×64 stacked frames + proprio(12) → Gaussian policy
+  - Critic: MLP on privileged state (goal, vel, geodesic, obstacle dist) → value
 
 Usage (same flags as train.py):
     python scripts/skrl/train_labyrinth.py \\
         --task Isaac-Labyrinth-Direct-v0  \\
-        --num_envs 256                    \\  # 256-512 recommended when camera is ON
+        --num_envs 512                    \\  # 512 recommended when camera is ON
         --headless
 """
 
@@ -66,7 +65,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import isaac_robots.tasks  # noqa: F401
 
-from isaac_robots.tasks.direct.isaac_labyrinth.agents.cnn_mlp_model import CnnMlpSharedModel
+from isaac_robots.tasks.direct.isaac_labyrinth.agents.cnn_mlp_model import NatureCnnPolicy, MlpCritic
 
 
 @hydra_task_config(args_cli.task, "skrl_cfg_entry_point")
@@ -102,14 +101,15 @@ def main(env_cfg: DirectRLEnvCfg, agent_cfg: dict):
             args_cli.max_iterations * agent_cfg["agent"]["rollouts"]
         )
 
-    # ── Enable camera ─────────────────────────────────────────────────────────
+    # ── Enable camera (64×64, stacked frames) ──────────────────────────────────
     # NOTE: __post_init__ already ran (via hydra_task_config) with camera=None, so
     # cfg.observation_space is stale. Update it here before gym.make reads it.
-    from isaac_robots.tasks.direct.isaac_labyrinth.cfg import CRAZYFLIE_AI_CAMERA_CFG
-    env_cfg.camera = CRAZYFLIE_AI_CAMERA_CFG.replace(
+    from isaac_robots.tasks.direct.isaac_labyrinth.cfg import CRAZYFLIE_AI_CAMERA_64_CFG
+    env_cfg.camera = CRAZYFLIE_AI_CAMERA_64_CFG.replace(
         prim_path="/World/envs/env_.*/Robot/body/ai_camera"
     )
-    env_cfg.observation_space += env_cfg.camera.width * env_cfg.camera.height
+    # Actor obs: proprio(12) + stacked frames
+    env_cfg.observation_space = 12 + env_cfg.frame_stack * env_cfg.camera.height * env_cfg.camera.width
 
     # ── Create environment ───────────────────────────────────────────────────
     env_cfg.log_dir = log_dir
@@ -137,10 +137,9 @@ def main(env_cfg: DirectRLEnvCfg, agent_cfg: dict):
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
 
-    # ── Models ───────────────────────────────────────────────────────────────
-    # CnnMlpSharedModel auto-detects camera from obs space size.
-    # policy and value share the same instance (separate=False equivalent).
-    shared_model = CnnMlpSharedModel(
+    # ── Models (asymmetric actor-critic) ────────────────────────────────────
+    # Actor: NatureCNN on observation_space (proprio + stacked frames)
+    policy_model = NatureCnnPolicy(
         observation_space=env.observation_space,
         action_space=env.action_space,
         device=device,
@@ -151,11 +150,17 @@ def main(env_cfg: DirectRLEnvCfg, agent_cfg: dict):
             agent_cfg["models"]["policy"].get("initial_log_std", 0.0)
         ),
     )
-    models = {"policy": shared_model, "value": shared_model}
+    # Critic: MLP on state_space (privileged state)
+    value_model = MlpCritic(
+        observation_space=env.state_space,
+        action_space=env.action_space,
+        device=device,
+    )
+    models = {"policy": policy_model, "value": value_model}
 
     obs_dim = env.observation_space.shape[0]
-    mode = "CNN+MLP (camera)" if obs_dim > 18 else "MLP only (no camera)"
-    print(f"[INFO] Model mode: {mode}  (obs_dim={obs_dim})")
+    state_dim = env.state_space.shape[0] if env.state_space is not None else 0
+    print(f"[INFO] Asymmetric actor-critic  (obs_dim={obs_dim}, state_dim={state_dim})")
 
     # ── Memory ───────────────────────────────────────────────────────────────
     rollouts = agent_cfg["agent"].get("rollouts", 48)
@@ -189,9 +194,10 @@ def main(env_cfg: DirectRLEnvCfg, agent_cfg: dict):
     cfg["learning_rate_scheduler"] = KLAdaptiveLR
     kl_kwargs = a.get("learning_rate_scheduler_kwargs", {}) or {}
     cfg["learning_rate_scheduler_kwargs"] = {"kl_threshold": kl_kwargs.get("kl_threshold", 0.008)}
-    # State / value preprocessors
+    # Preprocessors: don't normalize actor obs (images are [0,1], proprio is moderate range).
+    # Normalize critic's privileged state and value targets.
     cfg["state_preprocessor"] = RunningStandardScaler
-    cfg["state_preprocessor_kwargs"] = {"size": env.observation_space, "device": device}
+    cfg["state_preprocessor_kwargs"] = {"size": env.state_space, "device": device}
     cfg["value_preprocessor"] = RunningStandardScaler
     cfg["value_preprocessor_kwargs"] = {"size": 1, "device": device}
     # Experiment
@@ -209,6 +215,7 @@ def main(env_cfg: DirectRLEnvCfg, agent_cfg: dict):
         cfg=cfg,
         observation_space=env.observation_space,
         action_space=env.action_space,
+        state_space=env.state_space,
         device=device,
     )
 

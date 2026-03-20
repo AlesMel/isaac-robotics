@@ -24,17 +24,34 @@ CRAZYFLIE_AI_CAMERA_CFG = TiledCameraCfg(
     offset=TiledCameraCfg.OffsetCfg(
         # Slightly in front of and above the drone body centre.
         # The AI deck sits on top of the Crazyflie with the camera facing forward.
-        pos=(0.03, 0.0, 0.01),
+        pos=(0.03, 0.0, 0.022),
         # Rotate so the camera's optical axis points along the drone's +X (forward).
-        # In ROS convention the camera Z-axis is optical-forward; applying a
-        # -90° rotation around Y and then -90° around X (expressed as quaternion
-        # (w, x, y, z) = (0.5, 0.5, -0.5, -0.5)) achieves this.
-        rot=(0.5, 0.5, -0.5, -0.5),
+        # In ROS convention: cam +Z (optical) → body +X, cam +Y (down) → body -Z.
+        # Quaternion (w, x, y, z) = (0.5, -0.5, 0.5, -0.5).
+        rot=(0.5, -0.5, 0.5, -0.5),
         convention="ros",
     ),
     data_types=["rgb"],
     width=324,
     height=244,
+    spawn=sim_utils.PinholeCameraCfg(
+        focal_length=0.870,
+        horizontal_aperture=1.1664,
+        vertical_aperture=0.8784,
+        clipping_range=(0.05, 10.0),
+    ),
+)
+
+CRAZYFLIE_AI_CAMERA_64_CFG = TiledCameraCfg(
+    prim_path="{ENV_REGEX_NS}/Robot/body/ai_camera",
+    offset=TiledCameraCfg.OffsetCfg(
+        pos=(0.03, 0.0, 0.022),
+        rot=(0.5, -0.5, 0.5, -0.5),
+        convention="ros",
+    ),
+    data_types=["rgb"],
+    width=64,
+    height=64,
     spawn=sim_utils.PinholeCameraCfg(
         focal_length=0.870,
         horizontal_aperture=1.1664,

@@ -24,14 +24,25 @@ class LabyrinthDirectEnv(DirectRLEnv):
 
         # Recompute obs dim from actual cfg — cfg.observation_space may be stale
         # if camera was set on the cfg after __post_init__ ran (which only saw camera=None).
-        _obs_dim = 12
-        if self.cfg.lidar is not None:
-            _obs_dim += self.cfg.sensor_selection.lidar_flat_dim
         if self.cfg.camera is not None:
-            _obs_dim += self.cfg.camera.width * self.cfg.camera.height
-        # Keep cfg.observation_space (int) in sync so base-class internals see the right value.
+            # Asymmetric mode: actor gets proprio(12) + stacked frames
+            cam_h, cam_w = self.cfg.camera.height, self.cfg.camera.width
+            _obs_dim = 12 + self.cfg.frame_stack * cam_h * cam_w
+            self._frame_buffer = torch.zeros(
+                self.num_envs, self.cfg.frame_stack, cam_h, cam_w, device=self.device,
+            )
+        else:
+            _obs_dim = 12
+            if self.cfg.lidar is not None:
+                _obs_dim += self.cfg.sensor_selection.lidar_flat_dim
+            self._frame_buffer = None
+        # Keep cfg and gym spaces in sync.
         self.cfg.observation_space = _obs_dim
         self.observation_space = spaces.Box(
+            low=-np.inf, high=np.inf,
+            shape=(_obs_dim,), dtype=np.float32,
+        )
+        self.single_observation_space["policy"] = spaces.Box(
             low=-np.inf, high=np.inf,
             shape=(_obs_dim,), dtype=np.float32,
         )
@@ -200,26 +211,66 @@ class LabyrinthDirectEnv(DirectRLEnv):
     # ── observations ─────────────────────────────────────────────────────────
 
     def _get_observations(self) -> dict[str, torch.Tensor]:
+        lin_vel_b = self._robot.data.root_lin_vel_b
+        ang_vel_b = self._robot.data.root_ang_vel_b
         desired_pos_b, _ = subtract_frame_transforms(
             self._robot.data.root_pos_w,
             self._robot.data.root_quat_w,
             self._desired_pos_w,
         )
+
+        if self._camera is not None:
+            # ── Actor obs: proprio(12) + stacked frames ──────────────────────
+            rgba = self._camera.data.output["rgb"]  # (N, H, W, 4) uint8
+            gray = (
+                0.299 * rgba[..., 0].float()
+                + 0.587 * rgba[..., 1].float()
+                + 0.114 * rgba[..., 2].float()
+            ) / 255.0  # (N, H, W), normalised to [0, 1]
+
+            # Shift buffer left — .clone() required because source/dest overlap
+            self._frame_buffer[:, :-1] = self._frame_buffer[:, 1:].clone()
+            self._frame_buffer[:, -1] = gray
+
+            proprio = torch.cat([
+                lin_vel_b, ang_vel_b,
+                self._robot.data.projected_gravity_b,
+                desired_pos_b,
+            ], dim=-1)  # (N, 12)
+            actor_obs = torch.cat([
+                proprio,
+                self._frame_buffer.reshape(self.num_envs, -1),
+            ], dim=-1)  # (N, 16396)
+
+            # ── Critic obs: privileged state (11D) ───────────────────────────
+            if self._lidar_ranges_raw is not None:
+                min_obstacle = self._lidar_ranges_raw.min(dim=-1).values.unsqueeze(-1)
+            else:
+                min_obstacle = torch.full(
+                    (self.num_envs, 1),
+                    self.cfg.sensor_selection.lidar_max_distance_m,
+                    device=self.device,
+                )
+            geodesic = self._geodesic_remaining().unsqueeze(-1)
+            critic_obs = torch.cat([
+                desired_pos_b, lin_vel_b, ang_vel_b,
+                geodesic, min_obstacle,
+            ], dim=-1)  # (N, 11)
+
+            return {"policy": actor_obs, "critic": critic_obs}
+
+        # ── Fallback: no camera (flat MLP mode) ─────────────────────────────
         obs_parts = [
-            self._robot.data.root_lin_vel_b,
-            self._robot.data.root_ang_vel_b,
+            lin_vel_b, ang_vel_b,
             self._robot.data.projected_gravity_b,
             desired_pos_b,
         ]
         if self._lidar is not None:
-            # Reuse ranges cached by _get_rewards (called first in the step loop).
-            # Fall back to computing fresh only on the very first observation call.
             if self._lidar_ranges_raw is None:
                 ray_hits_w = self._lidar.data.ray_hits_w
                 lidar_origin_w = self._lidar.data.pos_w.unsqueeze(1)
                 self._lidar_ranges_raw = torch.linalg.norm(ray_hits_w - lidar_origin_w, dim=-1)
             lidar_ranges = self._lidar_ranges_raw.clone()
-            # Domain randomization: sensor noise (raw metres, before normalization)
             if self.cfg.domain_rand.sensor_noise_std > 0:
                 noise = torch.randn_like(lidar_ranges) * self.cfg.domain_rand.sensor_noise_std
                 lidar_ranges = lidar_ranges + noise
@@ -229,17 +280,26 @@ class LabyrinthDirectEnv(DirectRLEnv):
             lidar_ranges.clamp_(0.0, 1.0)
             obs_parts.append(lidar_ranges.reshape(self.num_envs, -1))
 
-        if self._camera is not None:
-            # RGB output: (num_envs, H, W, 4) uint8 (RGBA) — drop alpha, convert to grayscale.
-            rgba = self._camera.data.output["rgb"]  # (N, H, W, 4)
-            gray = (
-                0.299 * rgba[..., 0].float()
-                + 0.587 * rgba[..., 1].float()
-                + 0.114 * rgba[..., 2].float()
-            ) / 255.0  # normalise to [0, 1]
-            obs_parts.append(gray.reshape(self.num_envs, -1))
+        policy_obs = torch.cat(obs_parts, dim=-1)
 
-        return {"policy": torch.cat(obs_parts, dim=-1)}
+        # Always return "critic" key to avoid KeyError when state_space > 0
+        if self.cfg.state_space:
+            if self._lidar_ranges_raw is not None:
+                min_obstacle = self._lidar_ranges_raw.min(dim=-1).values.unsqueeze(-1)
+            else:
+                min_obstacle = torch.full(
+                    (self.num_envs, 1),
+                    self.cfg.sensor_selection.lidar_max_distance_m,
+                    device=self.device,
+                )
+            geodesic = self._geodesic_remaining().unsqueeze(-1)
+            critic_obs = torch.cat([
+                desired_pos_b, lin_vel_b, ang_vel_b,
+                geodesic, min_obstacle,
+            ], dim=-1)
+            return {"policy": policy_obs, "critic": critic_obs}
+
+        return {"policy": policy_obs}
 
     # ── geodesic distance lookup ─────────────────────────────────────────────
 
@@ -409,6 +469,10 @@ class LabyrinthDirectEnv(DirectRLEnv):
         self._previous_actions[env_ids] = 0.0
         self._thrust[env_ids] = 0.0
         self._moment[env_ids] = 0.0
+
+        # Reset frame stack history
+        if self._frame_buffer is not None:
+            self._frame_buffer[env_ids] = 0.0
 
         # Reset path tracking
         self._prev_remaining[env_ids] = float("inf")

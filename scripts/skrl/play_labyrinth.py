@@ -1,8 +1,7 @@
 """Play/evaluate a checkpoint trained with train_labyrinth.py.
 
 Drop-in replacement for scripts/skrl/play.py that manually instantiates
-CnnMlpSharedModel instead of going through SKRL's Runner (which only supports
-its own hardcoded mixin names and cannot load custom Python classes).
+NatureCnnPolicy + MlpCritic instead of going through SKRL's Runner.
 
 Usage:
     python scripts/skrl/play_labyrinth.py \\
@@ -57,7 +56,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 import isaaclab_tasks  # noqa: F401
 import isaac_robots.tasks  # noqa: F401
 
-from isaac_robots.tasks.direct.isaac_labyrinth.agents.cnn_mlp_model import CnnMlpSharedModel
+from isaac_robots.tasks.direct.isaac_labyrinth.agents.cnn_mlp_model import NatureCnnPolicy, MlpCritic
 
 
 @hydra_task_config(args_cli.task, "skrl_cfg_entry_point")
@@ -72,14 +71,14 @@ def main(env_cfg: DirectRLEnvCfg, agent_cfg: dict):
         seed = random.randint(0, 10000)
     env_cfg.seed = seed
 
-    # ── Enable camera (must match training) ───────────────────────────────────
+    # ── Enable camera (64×64, must match training) ────────────────────────────
     # NOTE: __post_init__ already ran (via hydra_task_config) with camera=None, so
     # cfg.observation_space is stale. Update it here before gym.make reads it.
-    from isaac_robots.tasks.direct.isaac_labyrinth.cfg import CRAZYFLIE_AI_CAMERA_CFG
-    env_cfg.camera = CRAZYFLIE_AI_CAMERA_CFG.replace(
+    from isaac_robots.tasks.direct.isaac_labyrinth.cfg import CRAZYFLIE_AI_CAMERA_64_CFG
+    env_cfg.camera = CRAZYFLIE_AI_CAMERA_64_CFG.replace(
         prim_path="/World/envs/env_.*/Robot/body/ai_camera"
     )
-    env_cfg.observation_space += env_cfg.camera.width * env_cfg.camera.height
+    env_cfg.observation_space = 12 + env_cfg.frame_stack * env_cfg.camera.height * env_cfg.camera.width
 
     # ── Checkpoint path ──────────────────────────────────────────────────────
     log_root_path = os.path.abspath(
@@ -125,22 +124,27 @@ def main(env_cfg: DirectRLEnvCfg, agent_cfg: dict):
     env = SkrlVecEnvWrapper(env)
     device = env.device
 
-    # ── Model ──
-    shared_model = CnnMlpSharedModel(
+    # ── Models (asymmetric actor-critic, must match training) ──
+    policy_model = NatureCnnPolicy(
         observation_space=env.observation_space,
         action_space=env.action_space,
         device=device,
     )
-    models = {"policy": shared_model, "value": shared_model}
+    value_model = MlpCritic(
+        observation_space=env.state_space,
+        action_space=env.action_space,
+        device=device,
+    )
+    models = {"policy": policy_model, "value": value_model}
 
     obs_dim = env.observation_space.shape[0]
-    mode = "CNN+MLP (camera)" if obs_dim > 18 else "MLP only (no camera)"
-    print(f"[INFO] Model mode: {mode}  (obs_dim={obs_dim})")
+    state_dim = env.state_space.shape[0] if env.state_space is not None else 0
+    print(f"[INFO] Asymmetric actor-critic  (obs_dim={obs_dim}, state_dim={state_dim})")
 
     # ── Agent (minimal config for eval — no training needed) ─────────────────
     cfg = PPO_DEFAULT_CONFIG.copy()
     cfg["state_preprocessor"] = RunningStandardScaler
-    cfg["state_preprocessor_kwargs"] = {"size": env.observation_space, "device": device}
+    cfg["state_preprocessor_kwargs"] = {"size": env.state_space, "device": device}
     cfg["value_preprocessor"] = RunningStandardScaler
     cfg["value_preprocessor_kwargs"] = {"size": 1, "device": device}
     cfg["experiment"]["write_interval"] = 'auto'      # no TensorBoard during play
@@ -155,6 +159,7 @@ def main(env_cfg: DirectRLEnvCfg, agent_cfg: dict):
         cfg=cfg,
         observation_space=env.observation_space,
         action_space=env.action_space,
+        state_space=env.state_space,
         device=device,
     )
 

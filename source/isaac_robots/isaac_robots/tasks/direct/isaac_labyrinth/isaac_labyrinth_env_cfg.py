@@ -30,7 +30,8 @@ class LabyrinthEnvCfg(DirectRLEnvCfg):
     decimation: int = 2
     action_space: int = 4
     observation_space: int = 12
-    state_space: int = 0
+    state_space: int = 11
+    frame_stack: int = 4
     debug_vis: bool = True
 
     viewer: ViewerCfg = ViewerCfg(
@@ -127,10 +128,9 @@ class LabyrinthEnvCfg(DirectRLEnvCfg):
         self.sim.render_interval = self.decimation
         self.terrain.num_envs = self.scene.num_envs
         self.terrain.env_spacing = self.scene.env_spacing
-        if self.lidar is not None:
-            self.observation_space = 12 + self.sensor_selection.lidar_flat_dim
         if self.camera is not None:
-            self.observation_space += self.camera.width * self.camera.height
+            # Asymmetric actor-critic: actor gets proprio(12) + stacked frames
+            self.observation_space = 12 + self.frame_stack * self.camera.height * self.camera.width
             if self.scene.num_envs > 512:
                 import warnings
                 warnings.warn(
@@ -139,3 +139,5 @@ class LabyrinthEnvCfg(DirectRLEnvCfg):
                     "This may exceed GPU memory. Consider setting num_envs <= 512.",
                     stacklevel=2,
                 )
+        elif self.lidar is not None:
+            self.observation_space = 12 + self.sensor_selection.lidar_flat_dim
