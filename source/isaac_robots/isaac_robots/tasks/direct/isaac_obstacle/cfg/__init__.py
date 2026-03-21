@@ -1,2 +1,2 @@
-from .._shared.assets import *
+from ..._shared.assets import *
 from .sensors import *

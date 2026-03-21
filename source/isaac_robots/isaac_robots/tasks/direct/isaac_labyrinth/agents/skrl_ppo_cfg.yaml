@@ -1,9 +1,11 @@
 seed: 42
 
 # ── Models ────────────────────────────────────────────────────────────────────
-# NOTE: the actual model architecture (NatureCnnPolicy + MlpCritic) is defined in
-#   agents/cnn_mlp_model.py  and instantiated by  scripts/skrl/train_labyrinth.py
-# which bypasses the YAML runner for model creation.
+# NOTE: When using CNN training (scripts/labyrinth/train_curriculum.py), the
+#   actual model architecture (NatureCnnPolicy + MlpCritic) is defined in
+#   agents/cnn_mlp_model.py and instantiated directly by the training script,
+#   bypassing the YAML model definitions below. The model section here is only
+#   used by the generic scripts/skrl/train.py runner (flat MLP mode).
 # Asymmetric actor-critic: actor sees stacked images + proprio,
 # critic sees privileged state (goal, vel, geodesic, obstacle dist).
 models:
@@ -47,7 +49,7 @@ agent:
   learning_rate_scheduler: KLAdaptiveLR
   learning_rate_scheduler_kwargs:
     kl_threshold: 0.008
-  observation_preprocessor: null
+  observation_preprocessor: RunningStandardScaler
   observation_preprocessor_kwargs: null
   state_preprocessor: RunningStandardScaler
   state_preprocessor_kwargs: null

@@ -22,7 +22,7 @@ from scipy.ndimage import gaussian_filter
 
 import isaaclab.sim as sim_utils
 
-from .ring_obstacle import RingCfg, RingChallengeCfg, spawn_ring
+from .ring_obstacle import RingCfg, RingChallengeCfg, spawn_ring, ring_yaw_tilt_to_quat
 from .goal_sampler import OccupancyGrid, GoalSampler
 
 
@@ -46,7 +46,7 @@ class LabyrinthCfg:
 # Wall spawning (perimeter cuboids)
 # ---------------------------------------------------------------------------
 
-_WALL_CFG = sim_utils.CuboidCfg(
+_WALL_CFG = sim_utils.MeshCuboidCfg(
     size=(1.0, 1.0, 1.0),  # overridden per call via dataclasses.replace
     rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
     mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
@@ -285,22 +285,22 @@ def _place_rings(
 # LabyrinthBuilder
 # ---------------------------------------------------------------------------
 
-def _set_xform_op(prim, op_type, value: float) -> None:
-    """Update an existing xform op value on a cloned prim."""
-    from pxr import UsdGeom
-    xform = UsdGeom.Xformable(prim)
-    for op in xform.GetOrderedXformOps():
-        if op.GetOpType() == op_type:
-            op.Set(value)
-            return
-
-
 def _set_translate_op(prim, wx: float, wy: float, wz: float) -> None:
     from pxr import UsdGeom, Gf
     xform = UsdGeom.Xformable(prim)
     for op in xform.GetOrderedXformOps():
         if op.GetOpType() == UsdGeom.XformOp.TypeTranslate:
             op.Set(Gf.Vec3d(wx, wy, wz))
+            return
+
+
+def _set_orient_op(prim, quat: tuple[float, float, float, float]) -> None:
+    """Update the OrientOp on a cloned prim with a new quaternion (w,x,y,z)."""
+    from pxr import UsdGeom, Gf
+    xform = UsdGeom.Xformable(prim)
+    for op in xform.GetOrderedXformOps():
+        if op.GetOpType() == UsdGeom.XformOp.TypeOrient:
+            op.Set(Gf.Quatf(quat[0], quat[1], quat[2], quat[3]))
             return
 
 
@@ -384,7 +384,6 @@ class LabyrinthBuilder:
         already correct (they received env_0's geometry during cloning).
         """
         import omni.usd
-        from pxr import UsdGeom
 
         stage = omni.usd.get_context().get_stage()
         n_layouts = self.cfg.n_layouts
@@ -426,8 +425,8 @@ class LabyrinthBuilder:
                     continue
                 ring = rings[j]
                 _set_translate_op(prim, ring.pos[0], ring.pos[1], ring.pos[2])
-                _set_xform_op(prim, UsdGeom.XformOp.TypeRotateZ, float(ring.yaw_deg))
-                _set_xform_op(prim, UsdGeom.XformOp.TypeRotateX, float(ring.tilt_deg - 90.0))
+                quat = ring_yaw_tilt_to_quat(ring.yaw_deg, ring.tilt_deg)
+                _set_orient_op(prim, quat)
 
         if pillars_missing + rings_missing > 0:
             print(

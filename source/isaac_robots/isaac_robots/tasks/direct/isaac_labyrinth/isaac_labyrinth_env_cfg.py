@@ -4,7 +4,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import ContactSensorCfg, TiledCameraCfg
+from isaaclab.sensors import CameraCfg, ContactSensorCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
@@ -32,7 +32,7 @@ class LabyrinthEnvCfg(DirectRLEnvCfg):
     observation_space: int = 12
     state_space: int = 11
     frame_stack: int = 4
-    debug_vis: bool = True
+    debug_vis: bool = False
 
     viewer: ViewerCfg = ViewerCfg(
         eye=(0.0, 0.0, 10.0),
@@ -68,11 +68,14 @@ class LabyrinthEnvCfg(DirectRLEnvCfg):
         debug_vis=False,
     )
 
-    robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+    robot: ArticulationCfg = CRAZYFLIE_CFG.replace(
+        prim_path="/World/envs/env_.*/Robot"
+    )
+    
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=4096,
         env_spacing=5.0,
-        replicate_physics=False,
+        replicate_physics=False,  # required: maze geometry uses raw USD prims, not RigidObjectCfg
         clone_in_fabric=False,
     )
 
@@ -84,7 +87,7 @@ class LabyrinthEnvCfg(DirectRLEnvCfg):
         seed=None,
         difficulty=0.5,
         spawn_walls=True,
-        n_layouts=64,  # set equal to num_envs for a unique layout per env
+        n_layouts=4,  # 1 = fastest (replicate_physics=True). increase to 4-8 for variety (requires replicate_physics=False)
     )
 
     # Sensors — set camera = CRAZYFLIE_AI_CAMERA_CFG.replace(...) to enable the camera.
@@ -92,13 +95,13 @@ class LabyrinthEnvCfg(DirectRLEnvCfg):
     lidar = MULTI_RANGER_CFG.replace(
         prim_path="/World/envs/env_.*/Robot/body",
     )
-    camera: TiledCameraCfg | None = None
+    camera: CameraCfg | None = None
     contact_sensor: ContactSensorCfg = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/body",
         history_length=1,
         track_air_time=False,
     )
-    collision_force_threshold: float = 0.5
+    collision_force_threshold: float = 2.0
     grace_seconds: float = 0.3
 
     # Action scaling
@@ -108,13 +111,16 @@ class LabyrinthEnvCfg(DirectRLEnvCfg):
     # Reward scales
     lin_vel_reward_scale: float = -0.01
     ang_vel_reward_scale: float = -0.01
-    distance_to_goal_reward_scale: float = 16.0
+    distance_to_goal_reward_scale: float = 2.0  # path_progress delta — kept moderate to avoid gradient explosion
+    geodesic_shaping_scale: float = 5.0  # continuous reward for proximity to waypoint (primary nav signal)
     wall_proximity_reward_scale: float = -5.0
     goal_reached_bonus: float = 10.0
-    alive_bonus: float = 0.5
-    alive_bonus_min_speed: float = 0.1
+    alive_bonus: float = 1.5
+    alive_bonus_min_speed: float = 0.1  # unused (alive bonus is now unconditional)
     tilt_reward_scale: float = -0.1
     action_smoothness_scale: float = -0.03
+    low_altitude_penalty_scale: float = -3.0
+    low_altitude_threshold: float = 0.3  # env-local z below which penalty kicks in
 
     # Thresholds
     goal_reached_threshold: float = 0.25

@@ -340,10 +340,14 @@ class GoalSampler:
         """Compute a 2-D Dijkstra distance field for each ring center.
 
         Returns ``(n_rings, grid_n, grid_n)`` float32 array in metres.
+        Sentinel rings (pos[2] < 0) get a zeros field — they are padding
+        and never used as real navigation targets.
         """
         waypoints = self.sample_ring_waypoints(rings)
-        fields = np.stack([
-            self.grid.compute_distance_field((wp[0], wp[1]))
-            for wp in waypoints
-        ])
-        return fields
+        fields = []
+        for i, wp in enumerate(waypoints):
+            if rings[i].pos[2] < 0:
+                fields.append(np.zeros((self.grid.n, self.grid.n), dtype=np.float32))
+            else:
+                fields.append(self.grid.compute_distance_field((wp[0], wp[1])))
+        return np.stack(fields)

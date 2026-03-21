@@ -1,11 +1,11 @@
-"""Play/evaluate a checkpoint trained with train_labyrinth.py.
+"""Play/evaluate a checkpoint trained with train_curriculum.py.
 
 Drop-in replacement for scripts/skrl/play.py that manually instantiates
 NatureCnnPolicy + MlpCritic instead of going through SKRL's Runner.
 
 Usage:
-    python scripts/labyrinth/play_cnn.py \\
-        --task Isaac-Labyrinth-Direct-v0 \\
+    python scripts/skrl/play_cnn.py \\
+        --task Isaac-Robots-Labyrinth-Direct-v0 \\
         --checkpoint logs/skrl/labyrinth_direct/<run>/checkpoints/best_agent.pt \\
         --num_envs 1
 """

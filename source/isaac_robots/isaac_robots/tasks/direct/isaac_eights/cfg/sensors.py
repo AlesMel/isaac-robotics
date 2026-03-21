@@ -4,7 +4,7 @@ import math
 
 from isaaclab.sensors import MultiMeshRayCasterCfg, RayCasterCfg, patterns
 from isaaclab.utils import configclass
-from .._shared.tof_pattern import CrazyflieToFPatternCfg
+from ..._shared.tof_pattern import CrazyflieToFPatternCfg
 
 LIDAR_CFG = MultiMeshRayCasterCfg(
     attach_yaw_only=True,

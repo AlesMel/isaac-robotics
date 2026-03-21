@@ -4,7 +4,7 @@ import math
 
 from isaaclab.sensors import MultiMeshRayCasterCfg, RayCasterCfg, patterns
 from isaaclab.utils import configclass
-from .._shared.tof_pattern import CrazyflieToFPatternCfg
+from ..._shared.tof_pattern import CrazyflieToFPatternCfg
 
 MULTI_RANGER_CFG = MultiMeshRayCasterCfg(
     prim_path="{ENV_REGEX_NS}/Robot/body",
@@ -15,7 +15,7 @@ MULTI_RANGER_CFG = MultiMeshRayCasterCfg(
         "/World/ground",
         MultiMeshRayCasterCfg.RaycastTargetCfg(prim_expr="/World/envs/env_.*/labyrinth/wall_.*"),
     ],
-    debug_vis=True,
+    debug_vis=False,
 )
 
 
@@ -31,7 +31,7 @@ _LIDAR_CHANNELS, _LIDAR_H_RAYS = _compute_ray_count(MULTI_RANGER_CFG.pattern_cfg
 
 @configclass
 class SensorSelectionCfg:
-    lidar_debug_vis: bool = True
+    lidar_debug_vis: bool = False
     lidar_channels: int = _LIDAR_CHANNELS
     lidar_horizontal_rays: int = _LIDAR_H_RAYS
     lidar_max_distance_m: float = 4.0

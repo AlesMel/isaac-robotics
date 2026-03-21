@@ -63,6 +63,26 @@ def _ring_aabb(
 # Spawning — single USD mesh prim per ring
 # ---------------------------------------------------------------------------
 
+def ring_yaw_tilt_to_quat(yaw_deg: float, tilt_deg: float) -> tuple[float, float, float, float]:
+    """Compose yaw (Z) and tilt-90 (X) rotations into a single (w,x,y,z) quaternion.
+
+    Equivalent to RotateZ(yaw) * RotateX(tilt - 90) but produces a single
+    orthonormal orientation — no risk of non-orthonormal xform matrices.
+    """
+    # RotateX(tilt - 90)
+    ax = math.radians(tilt_deg - 90.0) / 2.0
+    qx = (math.cos(ax), math.sin(ax), 0.0, 0.0)
+    # RotateZ(yaw)
+    az = math.radians(yaw_deg) / 2.0
+    qz = (math.cos(az), 0.0, 0.0, math.sin(az))
+    # Compose: qz * qx  (outermost * innermost)
+    w = qz[0]*qx[0] - qz[1]*qx[1] - qz[2]*qx[2] - qz[3]*qx[3]
+    x = qz[0]*qx[1] + qz[1]*qx[0] + qz[2]*qx[3] - qz[3]*qx[2]
+    y = qz[0]*qx[2] - qz[1]*qx[3] + qz[2]*qx[0] + qz[3]*qx[1]
+    z = qz[0]*qx[3] + qz[1]*qx[2] - qz[2]*qx[1] + qz[3]*qx[0]
+    return (w, x, y, z)
+
+
 def spawn_ring(
     base_prim_path: str,
     ring: RingCfg,
@@ -89,13 +109,9 @@ def spawn_ring(
     )
 
     # ------------------------------------------------------------------
-    # Spawn USD mesh prim (torus kept in default orientation — hole along Z)
-    # Orientation is stored as USD xform ops (rotateZ then rotateX) so that
-    # apply_layouts_to_envs() can update ring pose per-env after cloning.
-    #
-    # Xform stack (outermost → innermost, USD applies innermost first):
-    #   Translate | RotateZ(yaw) | RotateX(tilt − 90)
-    # This replicates the old trimesh T_yaw @ T_tilt vertex transform.
+    # Spawn USD mesh prim with a single translate + orient quaternion.
+    # Using one OrientOp instead of separate RotateZ + RotateX avoids
+    # non-orthonormal xform matrices that crash VSCode/Isaac Sim.
     # ------------------------------------------------------------------
     stage = omni.usd.get_context().get_stage()
     mesh = UsdGeom.Mesh.Define(stage, base_prim_path)
@@ -112,9 +128,11 @@ def spawn_ring(
     wx = env_origin[0] + ring.pos[0]
     wy = env_origin[1] + ring.pos[1]
     wz = env_origin[2] + ring.pos[2]
-    mesh.AddTranslateOp().Set(Gf.Vec3d(wx, wy, wz))          # outermost
-    mesh.AddRotateZOp().Set(float(ring.yaw_deg))              # middle
-    mesh.AddRotateXOp().Set(float(ring.tilt_deg - 90.0))     # innermost (applied first)
+    mesh.AddTranslateOp().Set(Gf.Vec3d(wx, wy, wz))
+
+    # Single quaternion orientation (always orthonormal)
+    w, x, y, z = ring_yaw_tilt_to_quat(ring.yaw_deg, ring.tilt_deg)
+    mesh.AddOrientOp().Set(Gf.Quatf(w, x, y, z))
 
     # Display color (amber glow)
     r, g, b = ring.color
