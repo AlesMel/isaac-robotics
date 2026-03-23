@@ -12,7 +12,18 @@
       "Bash(find /home/urkui-3 -path *site-packages* -prune -o -name *.py -type f -exec grep -l \"def run\\\\|class Runner\" {})",
       "Bash(2)",
       "Bash(find /home/urkui-3/Documents/skrl -name *runner* -type f)",
-      "Bash(grep -E \"\\\\.py$\")"
+      "Bash(grep -E \"\\\\.py$\")",
+      "Bash(git -C /home/urkui-3/Documents/isaac-robotics status --short)",
+      "Bash(du -sh /home/urkui-3/Documents/isaac-robotics/outputs/*)",
+      "Bash(ls -lah /home/urkui-3/Documents/isaac-robotics/*.html /home/urkui-3/Documents/isaac-robotics/*.ipynb /home/urkui-3/Documents/isaac-robotics/*.py /home/urkui-3/Documents/isaac-robotics/*.md)",
+      "Bash(ls -la *.py)",
+      "Bash(find /home/urkui-3/Documents/isaac-robotics/source/isaac_robots/isaac_robots/scripts -type f -name *.py)",
+      "Bash(find /home/urkui-3/Documents/isaac-robotics/scripts -type f -name *.py)",
+      "Bash(git add:*)",
+      "Bash(find /home/urkui-3/Documents/isaac-robotics -type f -name \"*.py\" -exec grep -l \"sim_utils\\\\|isaaclab.sim\" {})",
+      "Bash(grep -r \"set_prim_pose\\\\|GetTranslateOp\\\\|AddTranslateOp\\\\|prim_utils\\\\|UsdGeom.Xform\\\\|SetTranslation\" /home/urkui-3/Documents/isaac-robotics/source/ --include=*.py -n)",
+      "Bash(grep -rn \"GetTranslateOp\\\\|Set\\(Gf\\\\|Gf.Vec3d\\\\|translate_op\\\\|xformOp\" /home/urkui-3/Documents/isaac-robotics/ --include=*.py)",
+      "WebSearch"
     ]
   }
 }

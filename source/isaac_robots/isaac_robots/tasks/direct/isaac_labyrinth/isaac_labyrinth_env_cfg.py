@@ -74,20 +74,24 @@ class LabyrinthEnvCfg(DirectRLEnvCfg):
     
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=4096,
-        env_spacing=5.0,
+        env_spacing=6.0,
         replicate_physics=False,  # required: maze geometry uses raw USD prims, not RigidObjectCfg
         clone_in_fabric=False,
     )
 
     # Labyrinth generation
     labyrinth: LabyrinthCfg = LabyrinthCfg(
-        size=3.5,
+        size=5.5,
         wall_height=1.2,
         wall_thickness=0.1,
         seed=None,
-        difficulty=0.5,
+        difficulty=5.0,
         spawn_walls=True,
-        n_layouts=4,  # 1 = fastest (replicate_physics=True). increase to 4-8 for variety (requires replicate_physics=False)
+        n_layouts=10,        # 1 = fastest; increase for layout variety (requires replicate_physics=False)
+        n_pillars=None,      # None = derived from difficulty: int(6 + difficulty * 10)
+        n_rings=8,           # None = derived from difficulty: int(2 + difficulty * 4)
+        pillar_radius_min=None,  # None = derived from difficulty (~0.08–0.11 m)
+        pillar_radius_max=None,  # None = derived from difficulty (~0.08–0.17 m)
     )
 
     # Sensors — set camera = CRAZYFLIE_AI_CAMERA_CFG.replace(...) to enable the camera.

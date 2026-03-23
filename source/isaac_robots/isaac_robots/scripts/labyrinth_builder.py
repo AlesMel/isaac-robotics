@@ -11,7 +11,6 @@ Usage inside _setup_scene():
     self._labyrinth = LabyrinthBuilder(cfg)
     self._labyrinth.build(self.scene, self._env_origins)
 """
-
 from __future__ import annotations
 import dataclasses
 import math
@@ -39,6 +38,9 @@ class LabyrinthCfg:
     difficulty: float = 0.5    # 0.0 = easy (fewer/smaller pillars), 1.0 = hard
     spawn_walls: bool = True   # set False for open arena (rings only)
     n_pillars: int | None = None  # override pillar count (None = derived from difficulty)
+    n_rings: int | None = None    # override ring/goal count (None = derived from difficulty)
+    pillar_radius_min: float | None = None  # per-pillar radius lower bound (None = difficulty-derived)
+    pillar_radius_max: float | None = None  # per-pillar radius upper bound (None = difficulty-derived)
     n_layouts: int = 8       # number of distinct procedural layouts to pre-generate
 
 
@@ -122,8 +124,9 @@ def _place_pillars(
     s = cfg.size
     h = cfg.wall_height
     n_pillars = cfg.n_pillars if cfg.n_pillars is not None else int(6 + cfg.difficulty * 10)
-    pillar_radius = 0.08 + cfg.difficulty * 0.06      # 0.08–0.14 m
-    min_spacing = pillar_radius * 2 + 0.3             # edge-to-edge clearance
+    r_min = cfg.pillar_radius_min if cfg.pillar_radius_min is not None else 0.08 + cfg.difficulty * 0.03
+    r_max = cfg.pillar_radius_max if cfg.pillar_radius_max is not None else 0.08 + cfg.difficulty * 0.09
+    r_min, r_max = min(r_min, r_max), max(r_min, r_max)
     spawn_clearance = 0.6                              # keep spawn zone open
 
     # Generate Gaussian-smoothed noise density map (32×32 grid over arena)
@@ -151,16 +154,18 @@ def _place_pillars(
         ci, cj = candidates[idx]
         x, y = cell_to_xy(int(ci), int(cj))
 
+        radius = rng.uniform(r_min, r_max)
+
         # Reject if too close to spawn or arena boundary
-        if math.hypot(x, y) < spawn_clearance + pillar_radius:
+        if math.hypot(x, y) < spawn_clearance + radius:
             continue
-        if abs(x) > half - pillar_radius - 0.1 or abs(y) > half - pillar_radius - 0.1:
+        if abs(x) > half - radius - 0.1 or abs(y) > half - radius - 0.1:
             continue
-        # Reject if too close to another pillar
-        if any(math.hypot(x - px, y - py) < min_spacing for px, py, *_ in pillars):
+        # Reject if too close to another pillar (per-pillar radii)
+        if any(math.hypot(x - px, y - py) < (radius + pr + 0.3) for px, py, _, pr in pillars):
             continue
 
-        pillars.append((x, y, h / 2, pillar_radius))
+        pillars.append((x, y, h / 2, radius))
 
     return pillars
 
@@ -323,7 +328,7 @@ class LabyrinthBuilder:
 
         perimeter = _build_perimeter_walls(cfg)
         # Canonical ring count: same across all layouts for uniform tensor shapes.
-        canonical_n_rings = int(2 + cfg.difficulty * 4)
+        canonical_n_rings = cfg.n_rings if cfg.n_rings is not None else int(2 + cfg.difficulty * 4)
 
         for layout_id in range(n_layouts):
             rng = random.Random(base_seed + layout_id)
