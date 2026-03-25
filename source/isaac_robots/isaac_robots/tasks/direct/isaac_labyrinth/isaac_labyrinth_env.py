@@ -86,6 +86,33 @@ class LabyrinthDirectEnv(DirectRLEnv):
             np.stack(wp_list, axis=0), dtype=torch.float32, device=self.device
         )
 
+        # Per-layout ring plane normals (n_layouts, n_wp, 3) and inner radii (n_layouts, n_wp).
+        # Normal formula: n = (-cos(tilt)*sin(yaw), cos(tilt)*cos(yaw), sin(tilt))
+        # Derivation: start from z-up normal, apply yaw then tilt — matches ring_obstacle.py.
+        _normals, _radii = [], []
+        for k in range(n_layouts):
+            ns, rs = [], []
+            for ring in self._labyrinth._rings_per_layout[k]:
+                yaw = np.radians(ring.yaw_deg)
+                tlt = np.radians(ring.tilt_deg)
+                ns.append((-np.cos(tlt) * np.sin(yaw),
+                             np.cos(tlt) * np.cos(yaw),
+                             np.sin(tlt)))
+                rs.append(ring.radius)
+            _normals.append(ns)
+            _radii.append(rs)
+        self._ring_normals_per_layout = torch.tensor(
+            np.array(_normals, dtype=np.float32), device=self.device
+        )  # (n_layouts, n_wp, 3)
+        self._ring_radii_per_layout = torch.tensor(
+            np.array(_radii, dtype=np.float32), device=self.device
+        )  # (n_layouts, n_wp)
+
+        # Plane-crossing state: tracks each drone's signed distance and position from the
+        # previous step so we can detect sign-flip (= plane crossing) each reward step.
+        self._prev_signed_dist = torch.zeros(self.num_envs, device=self.device)
+        self._prev_pos_w       = torch.zeros(self.num_envs, 3, device=self.device)
+
         # Per-layout geodesic distance fields: (n_layouts, n_wp, grid_n, grid_n)
         grid = self._labyrinth._goal_samplers[0].grid
         self._grid_half = grid._half
@@ -350,10 +377,30 @@ class LabyrinthDirectEnv(DirectRLEnv):
         ang_vel_b = self._robot.data.root_ang_vel_b
         proj_grav = self._robot.data.projected_gravity_b
 
-        # 1. Waypoint advancement (wraps at per-env real count, skipping sentinels)
-        distance_to_goal = torch.linalg.norm(self._desired_pos_w - pos_w, dim=1)
-        goal_reached = (distance_to_goal < self.cfg.goal_reached_threshold).float()
-        reached_ids = goal_reached.bool().nonzero(as_tuple=False).squeeze(-1)
+        # 1. Waypoint advancement — plane-crossing detection.
+        # A ring is "traversed" only when the drone crosses the ring's geometric plane
+        # AND the crossing point lies within the ring's inner radius.
+        cur_normal  = self._ring_normals_per_layout[self._env_layout_id, self._waypoint_idx]  # (N,3)
+        cur_radius  = self._ring_radii_per_layout[self._env_layout_id, self._waypoint_idx]    # (N,)
+        offset      = pos_w - self._desired_pos_w                                              # (N,3)
+        signed_dist = (offset * cur_normal).sum(dim=-1)                                        # (N,)
+
+        # Sign flip → drone crossed the plane this step.
+        crossed = (self._prev_signed_dist * signed_dist) < 0  # (N,)
+
+        # Linearly interpolate to find where on the segment the plane was crossed,
+        # then check if that point falls inside the ring opening.
+        abs_denom = (self._prev_signed_dist - signed_dist).abs().clamp(min=1e-6)
+        t         = torch.where(crossed, self._prev_signed_dist.abs() / abs_denom,
+                                torch.zeros_like(signed_dist)).clamp(0.0, 1.0)
+        cross_pt  = self._prev_pos_w + t.unsqueeze(-1) * (pos_w - self._prev_pos_w)  # (N,3)
+        cross_off = cross_pt - self._desired_pos_w                                    # (N,3)
+        # Project cross_off onto the ring plane (remove normal component) → lateral distance
+        lateral   = (cross_off - (cross_off * cur_normal).sum(-1, keepdim=True) * cur_normal).norm(dim=-1)
+        within    = lateral < cur_radius                                               # (N,)
+
+        goal_reached = (crossed & within).float()
+        reached_ids  = goal_reached.bool().nonzero(as_tuple=False).squeeze(-1)
         if reached_ids.numel() > 0:
             real_count = self._env_real_wp_count[reached_ids]
             new_idx = (self._waypoint_idx[reached_ids] + 1) % real_count
@@ -418,6 +465,18 @@ class LabyrinthDirectEnv(DirectRLEnv):
 
         for key, value in rewards.items():
             self._episode_sums[key] += value
+
+        # Update plane-crossing state for next step.
+        self._prev_pos_w       = pos_w.detach()
+        self._prev_signed_dist = signed_dist.detach()
+        # For envs that just advanced, reseed against the NEW ring so the sign-flip
+        # from the old plane doesn't immediately re-trigger next step.
+        if reached_ids.numel() > 0:
+            new_n   = self._ring_normals_per_layout[
+                self._env_layout_id[reached_ids], self._waypoint_idx[reached_ids]
+            ]
+            new_off = pos_w[reached_ids] - self._desired_pos_w[reached_ids]
+            self._prev_signed_dist[reached_ids] = (new_off * new_n).sum(dim=-1).detach()
 
         return reward
 
@@ -563,6 +622,18 @@ class LabyrinthDirectEnv(DirectRLEnv):
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+
+        # Seed plane-crossing buffers from the spawn position so the first reward step
+        # doesn't see a spurious sign-flip (spawn is always on one side of ring 0).
+        reset_pos = default_root_state[:, :3]  # (K, 3) already in world frame
+        ring_n    = self._ring_normals_per_layout[
+            self._env_layout_id[env_ids],
+            torch.zeros(len(env_ids), dtype=torch.long, device=self.device),
+        ]  # (K, 3)
+        ring_c    = self._waypoints_w[env_ids, 0]  # (K, 3)
+        off       = reset_pos - ring_c
+        self._prev_signed_dist[env_ids] = (off * ring_n).sum(dim=-1)
+        self._prev_pos_w[env_ids]       = reset_pos
 
         # # ── Debug: detect reset issues (remove once training is stable) ──
         # if len(env_ids) < 64:  # only print for small batches to avoid spam
