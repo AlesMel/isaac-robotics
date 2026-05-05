@@ -1,0 +1,82 @@
+# skrl PPO config for the UR3e Reach task.
+#
+# Notes for students -- how this differs from the Crazyflie config:
+#   * Hidden layers are [128, 128] rather than [32, 32]. The arm has a
+#     larger observation (~26D) and a 6D action; the smaller net struggles.
+#   * learning_rate is 3e-4 (vs 5e-4). Joint-position-target control is
+#     more sensitive than direct thrust -- a smaller LR avoids instability.
+#   * Rollouts and mini-batches are reduced; the episode is shorter (5s) so
+#     fewer rollouts per update is enough.
+#   * experiment.directory is "ur3e_reach_direct" so logs land in their own
+#     folder under logs/skrl/.
+
+seed: 42
+
+models:
+  separate: False
+  policy:
+    class: GaussianMixin
+    clip_actions: False
+    clip_log_std: True
+    min_log_std: -20.0
+    max_log_std: 2.0
+    initial_log_std: 0.0
+    network:
+      - name: net
+        input: OBSERVATIONS
+        layers: [128, 128]
+        activations: elu
+    output: ACTIONS
+  value:
+    class: DeterministicMixin
+    clip_actions: False
+    network:
+      - name: net
+        input: OBSERVATIONS
+        layers: [128, 128]
+        activations: elu
+    output: ONE
+
+
+memory:
+  class: RandomMemory
+  memory_size: -1
+
+
+agent:
+  class: PPO
+  rollouts: 24
+  learning_epochs: 8
+  mini_batches: 4
+  discount_factor: 0.99
+  lambda: 0.95
+  learning_rate: 3.0e-04
+  learning_rate_scheduler: KLAdaptiveLR
+  learning_rate_scheduler_kwargs:
+    kl_threshold: 0.008
+  state_preprocessor: RunningStandardScaler
+  state_preprocessor_kwargs: null
+  value_preprocessor: RunningStandardScaler
+  value_preprocessor_kwargs: null
+  random_timesteps: 0
+  learning_starts: 0
+  grad_norm_clip: 1.0
+  ratio_clip: 0.2
+  value_clip: 0.2
+  clip_predicted_values: True
+  entropy_loss_scale: 0.0
+  value_loss_scale: 2.0
+  kl_threshold: 0.0
+  rewards_shaper_scale: 1.0
+  time_limit_bootstrap: False
+  experiment:
+    directory: "ur3e_reach_direct"
+    experiment_name: ""
+    write_interval: auto
+    checkpoint_interval: auto
+
+
+trainer:
+  class: SequentialTrainer
+  timesteps: 100000
+  environment_info: log

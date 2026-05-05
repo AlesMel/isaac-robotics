@@ -211,7 +211,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, expe
     print(f"[INFO] Loading model checkpoint from: {resume_path}")
     runner.agent.load(resume_path)
     # set agent to evaluation mode
-    runner.agent.set_running_mode("eval")
+    # runner.agent.set_running_mode("eval")
 
     # reset environment
     obs, _ = env.reset()
@@ -223,7 +223,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, expe
         # run everything in inference mode
         with torch.inference_mode():
             # agent stepping
-            outputs = runner.agent.act(obs, timestep=0, timesteps=0)
+            # skrl >= 1.4 requires `states` as a positional arg (None for
+            # single-agent envs that don't expose a separate state space).
+            outputs = runner.agent.act(obs, None, timestep=0, timesteps=0)
             # - multi-agent (deterministic) actions
             if hasattr(env, "possible_agents"):
                 actions = {a: outputs[-1][a].get("mean_actions", outputs[0][a]) for a in env.possible_agents}
