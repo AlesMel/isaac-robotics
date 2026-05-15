@@ -12,7 +12,7 @@ from . import agents
 ##
 
 gym.register(
-    id="Isaac-Robots-UR3E-Reach-Direct-v0",
+    id="Isaac-Robots-UR3e-Reach-Direct-v0",
     entry_point=f"{__name__}.ur3e_reach_env:UR3eReachDirectEnv",
     disable_env_checker=True,
     kwargs={

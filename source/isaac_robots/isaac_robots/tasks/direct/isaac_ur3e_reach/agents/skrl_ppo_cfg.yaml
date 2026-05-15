@@ -2,13 +2,14 @@
 #
 # Notes for students -- how this differs from the Crazyflie config:
 #   * Hidden layers are [128, 128] rather than [32, 32]. The arm has a
-#     larger observation (~26D) and a 6D action; the smaller net struggles.
+#     21D position-only observation by default and a 6D action; the smaller
+#     net struggles.
 #   * learning_rate is 3e-4 (vs 5e-4). Joint-position-target control is
 #     more sensitive than direct thrust -- a smaller LR avoids instability.
 #   * Rollouts and mini-batches are reduced; the episode is shorter (5s) so
 #     fewer rollouts per update is enough.
-#   * experiment.directory is "ur3e_reach_direct" so logs land in their own
-#     folder under logs/skrl/.
+#   * experiment.directory is "ur3e_reach_abs_ur10_reward_direct" so logs land
+#     in their own folder under logs/skrl/.
 
 seed: 42
 
@@ -20,12 +21,12 @@ models:
     clip_log_std: True
     min_log_std: -20.0
     max_log_std: 2.0
-    initial_log_std: 0.0
+    initial_log_std: -1.0
     network:
       - name: net
         input: OBSERVATIONS
         layers: [128, 128]
-        activations: elu
+        activations: tanh
     output: ACTIONS
   value:
     class: DeterministicMixin
@@ -34,7 +35,7 @@ models:
       - name: net
         input: OBSERVATIONS
         layers: [128, 128]
-        activations: elu
+        activations: tanh
     output: ONE
 
 
@@ -70,7 +71,7 @@ agent:
   rewards_shaper_scale: 1.0
   time_limit_bootstrap: False
   experiment:
-    directory: "ur3e_reach_direct"
+    directory: "ur3e_reach_abs_ur10_reward_direct"
     experiment_name: ""
     write_interval: auto
     checkpoint_interval: auto
@@ -78,5 +79,5 @@ agent:
 
 trainer:
   class: SequentialTrainer
-  timesteps: 100000
+  timesteps: 200000
   environment_info: log
