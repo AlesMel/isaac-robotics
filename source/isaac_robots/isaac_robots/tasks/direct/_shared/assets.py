@@ -25,6 +25,14 @@ DEFAULT_UR3E_USD = os.getenv(
     "UR3E_USD_PATH",
     str(_REPO_ROOT / "source" / "isaac_robots" / "data" / "ur3e" / "ur3e.usd"),
 )
+DEFAULT_UR3E_ROBOTIQ_2F85_USD = os.getenv(
+    "UR3E_ROBOTIQ_2F85_USD_PATH",
+    str(_REPO_ROOT / "source" / "isaac_robots" / "data" / "ur3e" / "ur3e_robotiq_2f85.usd"),
+)
+DEFAULT_UR3E_ROBOTIQ_HANDE_USD = os.getenv(
+    "UR3E_ROBOTIQ_HANDE_USD_PATH",
+    str(_REPO_ROOT / "source" / "isaac_robots" / "data" / "ur3e" / "ur3e_robotiq_hande.usd"),
+)
 
 CRAZYFLIE_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",
@@ -67,8 +75,7 @@ CRAZYFLIE_CFG = ArticulationCfg(
 
 # Universal Robots UR3e (6-DOF arm).
 #
-# PD gains below are copied from Isaac Lab's UR10e config as a safe starting
-# point. The UR3e is roughly 3x lighter than the UR10e, so if you observe
+# PD gains below are a safe starting point for the UR3e. If you observe
 # oscillation or overshoot during training, halve the stiffness and damping
 # values and retune from there.
 #
@@ -89,7 +96,7 @@ UR3E_CFG = ArticulationCfg(
             max_depenetration_velocity=5.0,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            enabled_self_collisions=False,
+            enabled_self_collisions=True,
             solver_position_iteration_count=16,
             solver_velocity_iteration_count=1,
             # Pin the base to the world. Defense-in-depth: the USD already
@@ -128,4 +135,96 @@ UR3E_CFG = ArticulationCfg(
             damping=29.39,
         ),
     },
+)
+
+
+# Universal Robots UR3e with a real Robotiq 2F-85 gripper articulation.
+#
+# This config expects the Robotiq meshes, rigid bodies, joints, and
+# mimic/passive joint setup to already be authored into a combined
+# UR3e+Robotiq USD where the arm and gripper are one articulation.
+# Isaac Sim also ships the standalone gripper at:
+#   {ISAAC_NUCLEUS_DIR}/Robots/Robotiq/2F-85/Robotiq_2F_85_edit.usd
+# Do not reference that standalone USD under /Robot at runtime: it carries
+# its own articulation root.
+UR3E_ROBOTIQ_2F85_CFG = UR3E_CFG.copy()
+UR3E_ROBOTIQ_2F85_CFG.spawn.usd_path = DEFAULT_UR3E_ROBOTIQ_2F85_USD
+UR3E_ROBOTIQ_2F85_CFG.spawn.rigid_props.disable_gravity = True
+UR3E_ROBOTIQ_2F85_CFG.spawn.articulation_props.enabled_self_collisions = False
+UR3E_ROBOTIQ_2F85_CFG.init_state.joint_pos = UR3E_CFG.init_state.joint_pos.copy()
+UR3E_ROBOTIQ_2F85_CFG.init_state.joint_pos.update(
+    {
+        "finger_joint": 0.0,
+        "right_outer_knuckle_joint": 0.0,
+        "left_inner_finger_joint": 0.0,
+        "right_inner_finger_joint": 0.0,
+        "left_inner_finger_knuckle_joint": 0.0,
+        "right_inner_finger_knuckle_joint": 0.0,
+    }
+)
+UR3E_ROBOTIQ_2F85_CFG.actuators["gripper_drive"] = ImplicitActuatorCfg(
+    joint_names_expr=["finger_joint"],
+    effort_limit_sim=10.0,
+    velocity_limit_sim=1.0,
+    stiffness=11.25,
+    damping=0.1,
+    friction=0.0,
+    armature=0.0,
+)
+UR3E_ROBOTIQ_2F85_CFG.actuators["gripper_finger"] = ImplicitActuatorCfg(
+    joint_names_expr=[".*_inner_finger_joint"],
+    effort_limit_sim=1.0,
+    velocity_limit_sim=1.0,
+    stiffness=0.2,
+    damping=0.001,
+    friction=0.0,
+    armature=0.0,
+)
+UR3E_ROBOTIQ_2F85_CFG.actuators["gripper_passive"] = ImplicitActuatorCfg(
+    joint_names_expr=[".*_inner_finger_knuckle_joint", "right_outer_knuckle_joint"],
+    effort_limit_sim=1.0,
+    velocity_limit_sim=1.0,
+    stiffness=0.0,
+    damping=0.0,
+    friction=0.0,
+    armature=0.0,
+)
+
+
+# Universal Robots UR3e with a real Robotiq Hand-E parallel-jaw gripper articulation.
+#
+# Like the 2F-85 config above, this expects a combined UR3e+Hand-E USD where the
+# arm and gripper are one articulation (build it with
+# ``scripts/ur3e/build_ur3e_robotiq_hande_usd.py``). The Hand-E drives two
+# prismatic finger sliders; unlike the 2F-85 it has no revolute knuckle/mimic
+# chain.
+#
+# NOTE: The slider joint names below ("Slider_1", "Slider_2") follow the Isaac
+# Sim ``Robotiq_Hand_E_edit.usd`` convention. If your assembled USD names them
+# differently, update the names here *and* ``RobotiqHandEGripperCfg`` -- the
+# build script logs ``robot.joint_names`` so you can confirm them.
+UR3E_ROBOTIQ_HANDE_CFG = UR3E_CFG.copy()
+UR3E_ROBOTIQ_HANDE_CFG.spawn.usd_path = DEFAULT_UR3E_ROBOTIQ_HANDE_USD
+UR3E_ROBOTIQ_HANDE_CFG.spawn.rigid_props.disable_gravity = True
+UR3E_ROBOTIQ_HANDE_CFG.spawn.articulation_props.enabled_self_collisions = False
+UR3E_ROBOTIQ_HANDE_CFG.init_state.joint_pos = UR3E_CFG.init_state.joint_pos.copy()
+UR3E_ROBOTIQ_HANDE_CFG.init_state.joint_pos.update(
+    {
+        "Slider_1": 0.0,
+        "Slider_2": 0.0,
+    }
+)
+# Real friction grasp: the sliders drive toward a closed target with stiff
+# position tracking and saturate at ``effort_limit_sim`` when they press on the
+# cube, so that effort cap is the steady clamping force. Tune ``effort_limit_sim``
+# (grip force, N) if the cube slips (raise) or gets flung (lower); the cube is
+# held by simulated contact + friction, not a kinematic attach.
+UR3E_ROBOTIQ_HANDE_CFG.actuators["gripper_slide"] = ImplicitActuatorCfg(
+    joint_names_expr=["Slider_.*"],
+    effort_limit_sim=20.0,
+    velocity_limit_sim=0.2,
+    stiffness=2000.0,
+    damping=100.0,
+    friction=0.0,
+    armature=0.0,
 )

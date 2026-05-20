@@ -53,7 +53,15 @@
       "Bash(python -c \"import skrl; print\\(skrl.__version__\\)\")",
       "Bash(python -c \"from skrl.agents.torch.ppo import PPO; print\\([x for x in dir\\(PPO\\) if ''CONFIG'' in x or ''config'' in x or ''cfg'' in x]\\)\")",
       "Bash(python -c \"import skrl.agents.torch.ppo as m; print\\([x for x in dir\\(m\\) if ''DEFAULT'' in x or ''CONFIG'' in x or ''config'' in x]\\)\")",
-      "Bash(python -c \"import omni.log; print\\([x for x in dir\\(omni.log\\) if not x.startswith\\(''_''\\)]\\)\")"
+      "Bash(python -c \"import omni.log; print\\([x for x in dir\\(omni.log\\) if not x.startswith\\(''_''\\)]\\)\")",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\alesm\\\\Documents\\\\robotics\\\\isaac-robotics\" -Recurse -Directory)",
+      "Bash(Select-Object -First 20 FullName)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\alesm\\\\Documents\\\\robotics\\\\isaac-robotics\\\\source\\\\isaac_robots\\\\isaac_robots\\\\tasks\\\\manager_based\\\\stack\" -Recurse -File)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(Sort-Object)",
+      "PowerShell(conda run -n env_isaaclab python scripts/ur3e/render_hande_preview.py)",
+      "PowerShell(conda run -n env_isaaclab python -m py_compile \"scripts/ur3e/build_ur3e_robotiq_hande_usd.py\" \"scripts/ur3e/render_hande_preview.py\")",
+      "PowerShell(if \\($?\\) { \"py_compile OK\" })"
     ]
   }
 }

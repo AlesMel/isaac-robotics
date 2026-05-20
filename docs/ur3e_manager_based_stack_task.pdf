@@ -1,0 +1,486 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R 7 0 R 9 0 R 11 0 R] /Count 4 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Length 2600 >>
+stream
+BT
+/F1 10 Tf
+50 760 Td
+14 TL
+(UR3E MANAGER-BASED CUBE STACKING TASK) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(MOTIVATION) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(The UR3e manager-based stack task is intended to train a simulated Universal Robots UR3e arm) Tj
+T*
+(to stack three cubes on a table using a suction-style end effector. The task mirrors Isaac) Tj
+T*
+(Lab's manager-based manipulation stack examples, but adapts the robot, TCP frame, and reward) Tj
+T*
+(design to the local UR3e asset used in this repository.) Tj
+T*
+() Tj
+T*
+(The original Isaac Lab stack examples are well suited for imitation learning with robomimic) Tj
+T*
+(when demonstration data is available. In this project, no demonstration dataset is assumed.) Tj
+T*
+(For that reason, the task also exposes a `skrl` PPO entry point and includes shaped rewards) Tj
+T*
+(so that the policy can be trained from scratch.) Tj
+T*
+() Tj
+T*
+(The practical goal is to create a reusable sim training task for UR3e manipulation:) Tj
+T*
+() Tj
+T*
+(  * validate the local UR3e USD asset in a contact-rich tabletop scenario;) Tj
+T*
+(  * train a policy without manually collecting robomimic demonstrations;) Tj
+T*
+(  * keep compatibility with Isaac Lab's manager-based environment structure;) Tj
+T*
+(  * preserve a future path for behavior cloning if demonstrations are collected later.) Tj
+T*
+() Tj
+T*
+(ENVIRONMENT DESCRIPTION) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(The environment is registered as two Gym tasks:) Tj
+T*
+() Tj
+T*
+(  * `Isaac-Robots-Stack-Cube-UR3e-Long-Suction-IK-Rel-v0`) Tj
+T*
+(  * `Isaac-Robots-Stack-Cube-UR3e-Short-Suction-IK-Rel-v0`) Tj
+T*
+() Tj
+T*
+(Both tasks use `isaaclab.envs:ManagerBasedRLEnv` and the local manager-based UR3e stack) Tj
+T*
+(configuration. The difference between the two tasks is the suction offset used for the end) Tj
+T*
+(effector:) Tj
+T*
+() Tj
+T*
+(Variant  TCP body  Suction offset) Tj
+T*
+(Long suction  `tool0`  `0.22 m`) Tj
+T*
+(Short suction  `tool0`  `0.1585 m` / `0.159 m`) Tj
+T*
+() Tj
+T*
+(The scene contains:) Tj
+T*
+() Tj
+T*
+(  * one UR3e articulation loaded from the local `UR3E_CFG`;) Tj
+T*
+(  * one Seattle lab table;) Tj
+T*
+(  * three rigid cube objects: `cube_1`, `cube_2`, and `cube_3`;) Tj
+T*
+(  * a ground plane and dome light;) Tj
+T*
+(  * a `FrameTransformer` tracking the UR3e `tool0` TCP frame;) Tj
+T*
+(  * a surface gripper attached under `{ENV_REGEX_NS}/Robot/tool0/SurfaceGripper`.) Tj
+T*
+() Tj
+T*
+(Isaac Lab's surface gripper backend currently requires CPU simulation, so the environment) Tj
+T*
+(sets both `self.device` and `self.sim.device` to `cpu`.) Tj
+T*
+() Tj
+T*
+(ACTION AND OBSERVATION SPACE) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>
+endobj
+6 0 obj
+<< /Length 2480 >>
+stream
+BT
+/F1 10 Tf
+50 760 Td
+14 TL
+(The task uses relative differential inverse kinematics for arm motion:) Tj
+T*
+() Tj
+T*
+(  * arm action: relative end-effector pose command through) Tj
+T*
+(  `DifferentialInverseKinematicsActionCfg`;) Tj
+T*
+(  * gripper action: binary surface-gripper command through) Tj
+T*
+(  `SurfaceGripperBinaryActionCfg`;) Tj
+T*
+(  * IK body: `tool0`;) Tj
+T*
+(  * IK method: damped least squares \(`dls`\).) Tj
+T*
+() Tj
+T*
+(For PPO, the policy observation group is configured with `concatenate_terms = True`. This) Tj
+T*
+(gives `skrl` a flat observation tensor instead of the dictionary-style observation layout) Tj
+T*
+(used by robomimic.) Tj
+T*
+() Tj
+T*
+(The policy observation contains:) Tj
+T*
+() Tj
+T*
+(  * previous action;) Tj
+T*
+(  * relative joint positions;) Tj
+T*
+(  * relative joint velocities;) Tj
+T*
+(  * stack object observation from Isaac Lab's stack MDP;) Tj
+T*
+(  * cube positions in world frame;) Tj
+T*
+(  * cube orientations in world frame;) Tj
+T*
+(  * end-effector position;) Tj
+T*
+(  * end-effector quaternion;) Tj
+T*
+(  * gripper position.) Tj
+T*
+() Tj
+T*
+(REWARD DESIGN) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(The PPO reward is intentionally shaped. Sparse success-only reward is unlikely to train) Tj
+T*
+(efficiently for a three-cube contact task from scratch, especially with a suction gripper) Tj
+T*
+(and no demonstrations. The reward therefore breaks the task into staged behaviors:) Tj
+T*
+() Tj
+T*
+(  1. approach `cube_2`;) Tj
+T*
+(  2. lift `cube_2`;) Tj
+T*
+(  3. align `cube_2` over `cube_1`;) Tj
+T*
+(  4. stack `cube_2` on `cube_1`;) Tj
+T*
+(  5. approach `cube_3`;) Tj
+T*
+(6. lift `cube_3`;) Tj
+T*
+(7. align `cube_3` over `cube_2`;) Tj
+T*
+(8. stack `cube_3` on `cube_2`;) Tj
+T*
+(9. award a full-stack success bonus.) Tj
+T*
+() Tj
+T*
+(The current reward terms are:) Tj
+T*
+() Tj
+T*
+(Reward term  Weight  Purpose) Tj
+T*
+(`reach_cube_2`  `2.0`  Move the TCP close to `cube_2`.) Tj
+T*
+(`lift_cube_2`  `4.0`  Lift `cube_2` above table height.) Tj
+T*
+(`align_cube_2_on_1`  `4.0`  Align `cube_2` horizontally above `cube_1`.) Tj
+T*
+(`stack_cube_2_on_1`  `10.0`  Reward a valid two-cube stack.) Tj
+T*
+(`reach_cube_3`  `1.0`  Move the TCP close to `cube_3`.) Tj
+T*
+(`lift_cube_3`  `3.0`  Lift `cube_3` above table height.) Tj
+T*
+(`align_cube_3_on_2`  `5.0`  Align `cube_3` horizontally above `cube_2`.) Tj
+T*
+(`stack_cube_3_on_2`  `15.0`  Reward placing the third cube on the stack.) Tj
+T*
+(`full_stack`  `30.0`  Reward the complete three-cube stack.) Tj
+T*
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 6 0 R >>
+endobj
+8 0 obj
+<< /Length 2089 >>
+stream
+BT
+/F1 10 Tf
+50 760 Td
+14 TL
+(`action_rate`  `-0.005`  Penalize abrupt action changes.) Tj
+T*
+(`joint_vel`  `-0.0005`  Penalize excessive joint velocity.) Tj
+T*
+() Tj
+T*
+(Reward Formulas) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(The reaching reward uses a Gaussian distance shaping term:) Tj
+T*
+() Tj
+T*
+(reward = exp\(-\(distance / std\)^2\)) Tj
+T*
+() Tj
+T*
+(The lifting reward is clipped between `0` and `1`:) Tj
+T*
+() Tj
+T*
+(reward = clip\(\(object_z - table_height\) / lift_height, 0, 1\)) Tj
+T*
+() Tj
+T*
+(The alignment reward combines horizontal alignment with a lifted gate:) Tj
+T*
+() Tj
+T*
+(xy_reward = exp\(-\(xy_distance / xy_std\)^2\)) Tj
+T*
+(lifted_gate = clip\(\(upper_z - lower_z\) / height_diff, 0, 1\)) Tj
+T*
+(reward = xy_reward * lifted_gate) Tj
+T*
+() Tj
+T*
+(The stack checks use cube-relative geometry instead of Franka finger-joint state. A pair is) Tj
+T*
+(considered stacked when:) Tj
+T*
+() Tj
+T*
+(xy_distance\(upper, lower\) < 0.05 m) Tj
+T*
+(abs\(\(upper_z - lower_z\) - 0.0468 m\) < 0.01 m) Tj
+T*
+() Tj
+T*
+(The full success check requires both:) Tj
+T*
+() Tj
+T*
+(cube_2 stacked on cube_1) Tj
+T*
+(cube_3 stacked on cube_2) Tj
+T*
+() Tj
+T*
+(TERMINATION AND SUCCESS) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(The task keeps the upstream timeout and cube-dropping terminations. The original stack) Tj
+T*
+(success condition is replaced with a local success check that does not assume a Franka) Tj
+T*
+(gripper or finger joints. This is important because the UR3e task uses a surface gripper) Tj
+T*
+(attached to `tool0`.) Tj
+T*
+() Tj
+T*
+(An episode is successful when:) Tj
+T*
+() Tj
+T*
+(  * `cube_2` is geometrically stacked on `cube_1`;) Tj
+T*
+(  * `cube_3` is geometrically stacked on `cube_2`;) Tj
+T*
+(  * the pairwise stack checks pass their horizontal and vertical thresholds.) Tj
+T*
+() Tj
+T*
+(TRAINING PATH) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(The task supports two learning paths:) Tj
+T*
+() Tj
+T*
+(Method  Status  Use case) Tj
+T*
+(`skrl` PPO  Active  Train from scratch without demonstrations.) Tj
+T*
+(robomimic BC  Registered for future use  Train from demonstrations once an HDF5 dataset) Tj
+T*
+(exists.) Tj
+T*
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 8 0 R >>
+endobj
+10 0 obj
+<< /Length 1736 >>
+stream
+BT
+/F1 10 Tf
+50 760 Td
+14 TL
+() Tj
+T*
+(Recommended smoke test:) Tj
+T*
+() Tj
+T*
+(python scripts/zero_agent.py --task=Isaac-Robots-Stack-Cube-UR3e-Long-Suction-IK-Rel-v0) Tj
+T*
+(--device cpu --num_envs 1) Tj
+T*
+() Tj
+T*
+(Recommended first PPO run:) Tj
+T*
+() Tj
+T*
+(python scripts/skrl/train.py --task=Isaac-Robots-Stack-Cube-UR3e-Long-Suction-IK-Rel-v0) Tj
+T*
+(--device cpu --num_envs 16) Tj
+T*
+() Tj
+T*
+(The task is expected to be difficult for PPO. If learning is unstable, the recommended) Tj
+T*
+(progression is:) Tj
+T*
+() Tj
+T*
+(  1. train only the first two-cube stack behavior;) Tj
+T*
+(  2. tune lift and alignment rewards;) Tj
+T*
+(  3. re-enable the third cube;) Tj
+T*
+(  4. increase parallel environments if CPU performance allows;) Tj
+T*
+(  5. consider scripted or teleoperated demonstrations for robomimic if PPO plateaus.) Tj
+T*
+() Tj
+T*
+(IMPLEMENTATION REFERENCES) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(Key local files:) Tj
+T*
+() Tj
+T*
+(  * `source/isaac_robots/isaac_robots/tasks/manager_based/stack/config/ur3e_gripper/__init) Tj
+T*
+(  __.py`) Tj
+T*
+(  * `source/isaac_robots/isaac_robots/tasks/manager_based/stack/config/ur3e_gripper/stack_) Tj
+T*
+(  joint_pos_env_cfg.py`) Tj
+T*
+(  * `source/isaac_robots/isaac_robots/tasks/manager_based/stack/config/ur3e_gripper/stack_) Tj
+T*
+(  ik_rel_env_cfg.py`) Tj
+T*
+(  * `source/isaac_robots/isaac_robots/tasks/manager_based/stack/mdp/rewards.py`) Tj
+T*
+(  * `source/isaac_robots/isaac_robots/tasks/manager_based/stack/config/ur3e_gripper/agents) Tj
+T*
+(  /skrl_ppo_cfg.yaml`) Tj
+T*
+() Tj
+T*
+(External design reference:) Tj
+T*
+() Tj
+T*
+(  * Isaac Lab manager-based manipulation stack task family.) Tj
+T*
+(  * Isaac Lab surface gripper tutorial and CPU simulation requirement.) Tj
+T*
+() Tj
+T*
+ET
+endstream
+endobj
+11 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 10 0 R >>
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000140 00000 n 
+0000000210 00000 n 
+0000002862 00000 n 
+0000002988 00000 n 
+0000005520 00000 n 
+0000005646 00000 n 
+0000007787 00000 n 
+0000007913 00000 n 
+0000009702 00000 n 
+trailer
+<< /Size 12 /Root 1 0 R >>
+startxref
+9830
+%%EOF

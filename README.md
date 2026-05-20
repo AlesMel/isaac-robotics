@@ -61,6 +61,18 @@ It allows you to develop in an isolated environment, outside of the core Isaac L
             python scripts/random_agent.py --task=<TASK_NAME>
             ```
 
+        UR3e manager-based stack tasks use Isaac Lab's surface gripper backend, which currently requires CPU simulation:
+
+        ```bash
+        python scripts/zero_agent.py --task=Isaac-Robots-Stack-Cube-UR3e-Long-Suction-IK-Rel-v0 --device cpu --num_envs 1
+        ```
+
+        Train the same task from scratch with skrl PPO:
+
+        ```bash
+        python scripts/skrl/train.py --task=Isaac-Robots-Stack-Cube-UR3e-Long-Suction-IK-Rel-v0 --device cpu --num_envs 16
+        ```
+
 ### Set up IDE (Optional)
 
 To setup the IDE, please follow these instructions:
