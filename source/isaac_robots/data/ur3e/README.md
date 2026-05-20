@@ -124,15 +124,21 @@ references the official Robotiq **Hand-E** asset from the Isaac Sim library
 `tool0`, and saves the combined USD.
 
 **Mount orientation:** the Hand-E `base_link` frame does not match the flange
-convention, so a corrective rotation is applied at the mount. The script's
-default `--mount-rpy-deg -90 0 180` is the confirmed value: the `-90` about X
-points the gripper out along tool0 +Z (verified numerically: gripper offset in
-the tool0 frame is `(0, 0, +0.015)`, dominant axis +Z), and the `180` yaw fixes
-a 180deg flip about the tool long axis. Override `--mount-rpy-deg` /
-`--mount-offset-xyz` (both in the tool0 frame) if you re-source the asset. The
-measured Hand-E spans ~`-0.06..+0.091 m` along tool0 +Z; if its coupling
-visually overlaps the wrist, push it forward with e.g.
-`--mount-offset-xyz 0 0 0.06`.
+convention, so the assembler mounts it tilted ~90deg sideways and with the
+coupling ~7.6 cm behind `tool0` (buried in the wrist). The build script's
+`--mount-rpy-deg` / `--mount-offset-xyz` (both in the tool0 frame) correct this,
+but **default to `0 0 0` / `0 0 0` (no correction)** — so a plain build produces
+the tilted/buried mount. The **known-good correction** for this asset is:
+
+```bash
+python scripts/ur3e/build_ur3e_robotiq_hande_usd.py --mount-rpy-deg 90 0 90 --mount-offset-xyz 0 0 0.076
+```
+
+Verified on the assembled USD: this points the fingers out along tool0 +Z
+(finger pads at +Z `0.092..0.105`, mean `0.096`), seats the coupling at the
+flange (screws at `z~0`), and opens the jaws along tool0 X. The 3rd value (yaw)
+spins the jaws about the tool axis: `90 0 0` opens them along Y, `90 0 90` along
+X. The committed `ur3e_robotiq_hande.usd` was built with `90 0 90`.
 
 You can sanity-check the mount without a GUI with
 `scripts/ur3e/render_hande_preview.py`, which prints the gripper's offset/extent
@@ -165,9 +171,12 @@ adjust if needed:
   actuator) in [_shared/assets.py](../../isaac_robots/tasks/direct/_shared/assets.py)
   and `gripper_joint_names_expr` in
   [robotiq_hande.py](../../isaac_robots/tasks/direct/_shared/grippers/robotiq_hande.py).
-* **Open/closed sign.** `finger_open_pos` / `finger_closed_pos` in
-  `RobotiqHandEGripperCfg` assume `+0.025` opens and `-0.025` closes. Flip the
-  signs if the sliders move the other way.
+* **Slider travel.** The Hand-E sliders travel **0 → 0.025 m** (verified from the
+  USD joint limits; `lowerLimit=0`, `upperLimit=0.025`). `finger_open_pos` /
+  `finger_closed_pos` in `RobotiqHandEGripperCfg` must stay in that range —
+  defaults are `0.0` (open) and `0.025` (closed). Driving outside it (e.g. the
+  old `-0.025`) over-extends the fingers past the housing. Swap the two values
+  if open/close feels inverted in the task.
 * **Grip force.** The `gripper_slide` actuator `effort_limit_sim` (default
   `20.0` N) is the steady clamping force. Raise it if the cube slips out, lower
   it if the cube gets flung.
@@ -176,9 +185,11 @@ adjust if needed:
   scene physics material (`static_friction = dynamic_friction = 1.0`). If the
   cube slips despite enough grip force, add a high-friction physics material to
   the finger pads / cube.
-* **Jaw-center offset.** `jaw_center_offset_local` (default `(0, 0, 0.085)`,
-  measured from the assembled USD) is the tool0→jaw-center distance used for the
-  grasp-readiness reward metric. Fingertips sit near tool0 +Z `0.091`.
+* **Jaw-center offset.** `jaw_center_offset_local` (default `(0, 0, 0.096)`,
+  measured on the corrected USD) is the tool0→jaw-center distance used for the
+  grasp-readiness reward metric. Finger pads sit at tool0 +Z `0.092..0.105`. This
+  value assumes the known-good mount correction above; re-measure if you rebuild
+  without it.
 * **Cube size vs jaw opening.** The Hand-E has only a ~50 mm stroke. The base
   task's cube (~80 mm) is likely too wide to grasp -- shrink the cube for the
   Hand-E variant (`UR3eLiftCubeHandEEnvCfg`) once you have measured both in

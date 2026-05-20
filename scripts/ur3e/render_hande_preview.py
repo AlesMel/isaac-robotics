@@ -52,7 +52,7 @@ def main() -> None:
         import omni.replicator.core as rep
         import omni.usd
         from isaacsim.core.utils.stage import add_reference_to_stage, create_new_stage, update_stage
-        from pxr import Gf, Usd, UsdGeom, UsdLux
+        from pxr import Gf, Usd, UsdGeom, UsdLux, UsdPhysics
 
         if not usd_path.is_file():
             raise FileNotFoundError(f"Combined USD not found: {usd_path}")
@@ -116,13 +116,20 @@ def main() -> None:
             for prim in Usd.PrimRange(gripper, Usd.TraverseInstanceProxies()):
                 if prim.IsA(UsdGeom.Gprim):
                     c = bbox_cache.ComputeWorldBound(prim).ComputeAlignedRange().GetMidpoint()
+                    lsz = bbox_cache.ComputeLocalBound(prim).ComputeAlignedRange().GetSize()
                     d = c - p_t0
-                    parts.append((d * z_axis, d * x_axis, d * y_axis, prim.GetName()))
+                    parts.append(
+                        (d * z_axis, d * x_axis, d * y_axis, (lsz[0], lsz[1], lsz[2]), prim.GetName())
+                    )
             parts.sort()
             _log(f"gripper leaf meshes found: {len(parts)}")
-            for pz, px, py, n in parts[:30]:
-                _log(f"  part tool0 (x,y,z)=({px:+.3f},{py:+.3f},{pz:+.3f}) '{n}'")
-            fingers = [p for p in parts if any(k in p[3].lower() for k in ("finger", "pad", "doigt"))]
+            for pz, px, py, lsz, n in parts[:30]:
+                _log(
+                    f"  tool0(x,y,z)=({px:+.3f},{py:+.3f},{pz:+.3f}) "
+                    f"localsize=({lsz[0]:.3f},{lsz[1]:.3f},{lsz[2]:.3f}) '{n}'"
+                )
+            fingers = [p for p in parts if any(k in p[4].lower() for k in ("finger", "pad", "doigt"))]
+            body = [p for p in parts if p not in fingers]
             if fingers:
                 fz = sum(p[0] for p in fingers) / len(fingers)
                 _log(
@@ -133,8 +140,26 @@ def main() -> None:
                 yr = max(p[2] for p in fingers) - min(p[2] for p in fingers)
                 _log(
                     f"jaw-opening spread: tool0 X range={xr:.4f}, Y range={yr:.4f} "
-                    f"(larger axis = direction the jaws open)"
+                    f"(larger axis = direction the jaws open; this is the default slider position)"
                 )
+                fmax = max(max(p[3]) for p in fingers)
+                bmax = max((max(p[3]) for p in body), default=0.0)
+                _log(
+                    f"SIZE CHECK: largest finger-mesh local dim={fmax:.3f} m vs largest body-mesh "
+                    f"local dim={bmax:.3f} m (a finger mesh much wider than its other dims = a rail)"
+                )
+
+            # Finger slider prismatic joint limits -> the real per-finger travel.
+            # If finger_open_pos/finger_closed_pos in RobotiqHandEGripperCfg exceed
+            # these, the cfg over-drives the sliders and the rails poke out.
+            mpu = UsdGeom.GetStageMetersPerUnit(stage)
+            _log(f"stage metersPerUnit = {mpu}")
+            for prim in Usd.PrimRange(stage.GetPrimAtPath("/World/Robot")):
+                if prim.GetName().lower().startswith("slider"):
+                    lo = prim.GetAttribute("physics:lowerLimit").Get()
+                    hi = prim.GetAttribute("physics:upperLimit").Get()
+                    ax = prim.GetAttribute("physics:axis").Get()
+                    _log(f"JOINT '{prim.GetName()}': axis={ax} lowerLimit={lo} upperLimit={hi} (stage units)")
 
             dom = max(range(3), key=lambda i: abs(v_local[i]))
             axis_name = ["X", "Y", "Z"][dom]
@@ -152,8 +177,9 @@ def main() -> None:
 
         # Two 3/4 views from opposite sides so the mount orientation is unambiguous.
         views = {
-            "view_a": (target[0] + 0.55, target[1] + 0.55, target[2] + 0.30),
-            "view_b": (target[0] + 0.55, target[1] - 0.55, target[2] + 0.30),
+            "view_a": (target[0] + 0.22, target[1] + 0.22, target[2] + 0.12),
+            "view_b": (target[0] + 0.22, target[1] - 0.22, target[2] + 0.12),
+            "view_top": (target[0], target[1], target[2] + 0.28),
         }
         for name, cam_pos in views.items():
             camera = rep.create.camera(position=cam_pos, look_at=target)

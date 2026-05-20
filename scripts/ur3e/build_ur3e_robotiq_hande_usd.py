@@ -64,26 +64,25 @@ def _parse_args() -> argparse.Namespace:
         "--mount-rpy-deg",
         type=float,
         nargs=3,
-        default=(90.0, 0.0, 0.0),
+        default=(0.0, 0.0, 0.0),
         metavar=("ROLL", "PITCH", "YAW"),
         help=(
             "Corrective rotation (degrees, about the tool0 X/Y/Z axes) applied to the gripper at "
-            "the mount. Default (90, 0, 0) is the confirmed correction for the Hand-E: its base_link "
-            "frame mounts ~90deg sideways and flipped, and +90 about X points the fingers out along "
-            "tool0 +Z. The 3rd value (yaw) spins about the tool long axis if you want a different "
-            "jaw-opening direction."
+            "the mount. Default (0, 0, 0) applies no correction -- the Hand-E base_link frame then "
+            "mounts ~90deg sideways. Known-good correction (fingers out along tool0 +Z, coupling "
+            "seated, jaws open along X): --mount-rpy-deg 90 0 90 --mount-offset-xyz 0 0 0.076 "
+            "(use yaw 0 instead of 90 to open the jaws along Y)."
         ),
     )
     parser.add_argument(
         "--mount-offset-xyz",
         type=float,
         nargs=3,
-        default=(0.0, 0.0, 0.076),
+        default=(0.0, 0.0, 0.0),
         metavar=("X", "Y", "Z"),
         help=(
             "Corrective translation (m, along the tool0 X/Y/Z axes) applied to the gripper at the "
-            "mount. Default +0.076 m along Z seats the Hand-E coupling on the flange; without it the "
-            "gripper's base_link frame leaves the coupling ~7.6 cm behind tool0 (buried in the wrist)."
+            "mount. Default (0, 0, 0) applies no offset. See --mount-rpy-deg for the known-good values."
         ),
     )
     parser.add_argument("--headless", action="store_true", default=True, help="Run Isaac Sim headless.")

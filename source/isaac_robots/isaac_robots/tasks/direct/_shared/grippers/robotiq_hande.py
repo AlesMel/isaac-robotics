@@ -199,11 +199,16 @@ class RobotiqHandEGripperCfg(GripperCfg):
     gripper_joint_names_expr: tuple[str, ...] = ("Slider_.*",)
     """Regex(es) matching the Hand-E finger slider joints. Confirm against the assembled USD."""
 
-    finger_open_pos: float = 0.025
-    """Slider target (m) for the fully open command."""
+    finger_open_pos: float = 0.0
+    """Slider target (m) for the fully open command (lower joint limit, matches init pose)."""
 
-    finger_closed_pos: float = -0.025
-    """Slider target (m) for the fully closed command. FLAG: confirm the sign against the USD."""
+    finger_closed_pos: float = 0.025
+    """Slider target (m) for the fully closed command.
+
+    The Hand-E sliders travel 0..0.025 m (verified from the USD joint limits).
+    Driving outside this range over-extends the fingers past the housing. If the
+    open/close action feels inverted in the task, swap these two values.
+    """
 
     jaw_center_offset_local: tuple[float, float, float] = (0.0, 0.0, 0.096)
     """TCP-local offset from tool0 to the jaw center (used for grasp metrics).
