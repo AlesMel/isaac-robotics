@@ -94,3 +94,14 @@ class GripperBase:
             Tensor of shape ``(num_envs, obs_dim)``.
         """
         return torch.zeros(self._num_envs, self.obs_dim, device=self._device)
+
+    def recommended_grasp_offset_w(self, half_extent: float) -> tuple[float, float, float]:
+        """Preferred world-frame offset from the object's root to its grasp target.
+
+        Suction wants the *top* face (cup contacts the surface). A parallel jaw
+        wants the *center* of the object (the body slides between the fingers).
+        Tasks that register a graspable object should ask the gripper for this
+        offset instead of hard-coding a suction-style ``half_extent`` offset.
+        """
+        del half_extent
+        return (0.0, 0.0, 0.0)

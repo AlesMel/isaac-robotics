@@ -111,6 +111,10 @@ class SuctionGripper(GripperBase):
         normal = normal / torch.clamp(torch.linalg.norm(normal), min=1.0e-6)
         self._surface_normal_w[:] = normal
 
+    def recommended_grasp_offset_w(self, half_extent: float) -> tuple[float, float, float]:
+        # Cup contacts the top face of an upright object.
+        return (0.0, 0.0, half_extent)
+
     def set_debug_vis(self, visible: bool) -> None:
         del visible
 

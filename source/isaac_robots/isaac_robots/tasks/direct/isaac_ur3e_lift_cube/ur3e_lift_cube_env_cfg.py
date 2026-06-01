@@ -22,7 +22,7 @@ class UR3eLiftCubeEnvCfg(DirectRLEnvCfg):
     debug_vis: bool = True
 
     action_space: int = 7
-    observation_space: int = 30
+    observation_space: int = 26
     state_space: int = 0
 
     # --- scene / sim ---
@@ -87,8 +87,8 @@ class UR3eLiftCubeEnvCfg(DirectRLEnvCfg):
     quat_sign_mode: str = "positive-max"
 
     # --- delta TCP action shaping ---
-    tcp_pos_action_scale: float = 0.04
-    tcp_rot_action_scale: float = 0.25
+    tcp_pos_action_scale: float = 0.02
+    tcp_rot_action_scale: float = 0.12
     ik_method: str = "dls"
 
     # --- cube sampling, in UR "Base" frame for x/y/z positions ---
@@ -98,29 +98,35 @@ class UR3eLiftCubeEnvCfg(DirectRLEnvCfg):
     cube_half_extent: float = 0.04
     cube_drop_height: float = -0.05
 
-    # --- success ---
-    success_lift_height: float = 0.10
-    success_height_threshold: float = 0.155
+    # --- goal sampling (lift target), in UR "Base" frame ---
+    # Mirrors UniformPoseCommand ranges in the Franka lift example
+    # (world x in (0.4, 0.6) maps to UR base x in (-0.6, -0.4); y/z unchanged
+    # by the 180-deg-about-Z flip between URDF root and "UR Base").
+    goal_pos_x_range: tuple[float, float] = (-0.6, -0.4)
+    goal_pos_y_range: tuple[float, float] = (-0.25, 0.25)
+    goal_pos_z_range: tuple[float, float] = (0.25, 0.5)
 
-    # --- reward weights ---
-    approach_weight: float = 2.0
-    approach_std: float = 0.10
-    align_weight: float = 0.5
-    grasp_ready_weight: float = 1.0
-    holding_weight: float = 4.0
-    lift_height_weight: float = 8.0
-    success_weight: float = 20.0
+    # --- reward shaping (matches Franka manager-based lift weights / std) ---
+    reaching_weight: float = 1.0
+    reaching_std: float = 0.1
+    lifting_min_height: float = 0.04
+    lifting_weight: float = 15.0
+    goal_tracking_std: float = 0.3
+    goal_tracking_weight: float = 16.0
+    goal_tracking_fine_std: float = 0.05
+    goal_tracking_fine_weight: float = 5.0
 
-    action_rate_l2_weight_initial: float = -0.0001
-    action_rate_l2_weight_final: float = -0.005
-    joint_vel_l2_weight_initial: float = -0.0001
-    joint_vel_l2_weight_final: float = -0.001
-    reward_curriculum_steps: int = 4500
+    # --- regularisation curriculum (Franka lift CurriculumCfg) ---
+    action_rate_l2_weight_initial: float = -1.0e-4
+    action_rate_l2_weight_final: float = -1.0e-1
+    joint_vel_l2_weight_initial: float = -1.0e-4
+    joint_vel_l2_weight_final: float = -1.0e-1
+    reward_curriculum_steps: int = 10000
 
     def __post_init__(self) -> None:
         self.sim.render_interval = self.decimation
         self.action_space = 6 + self.gripper.action_dim
-        self.observation_space = 29 + self.gripper.obs_dim
+        self.observation_space = 25 + self.gripper.obs_dim
 
         self.sim.physx.bounce_threshold_velocity = 0.01
         self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 1024 * 1024 * 4
@@ -135,20 +141,25 @@ class UR3eLiftCubeHandEEnvCfg(UR3eLiftCubeEnvCfg):
     The Hand-E performs a *real friction grasp*: the fingers physically clamp
     the cube and PhysX contact/friction holds it (no kinematic attach). The env
     is unchanged -- it delegates grasp logic to the gripper, and the Hand-E's
-    ``update_attachment`` is a no-op. ``__post_init__`` sizes the spaces from the
-    gripper (action 7, observation 31).
+    ``update_attachment`` is a no-op.
 
     PHYSICAL CONSTRAINT -- cube vs jaw opening: the Robotiq Hand-E has only a
     ~50 mm stroke, so it can only grasp an object that fits within its open
-    fingers. The base task's cube (``cube_half_extent = 0.04`` -> ~80 mm) is
-    almost certainly too wide for the jaws to close around. After building the
-    USD, load it once in Isaac Sim, measure the real jaw opening and the cube
-    width, and if needed shrink the cube for this variant (override ``cube``
-    scale, ``cube_half_extent``, ``cube_rest_center_z`` so the cube still rests
-    on the table, and ``success_height_threshold = cube_rest_center_z +
-    success_lift_height``). Left to manual tuning here because the exact cube
-    mesh size must be confirmed in-sim.
+    fingers. The base task's DexCube at scale 0.8 (~80 mm) is too wide for the
+    jaws, so this subclass overrides the cube to scale 0.5 (~50 mm) and shifts
+    ``cube_half_extent``, ``cube_rest_center_z``, and ``lifting_min_height`` to
+    stay consistent with the smaller footprint.
     """
 
     robot: ArticulationCfg = UR3E_ROBOTIQ_HANDE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
     gripper: GripperCfg = RobotiqHandEGripperCfg()
+
+    def __post_init__(self) -> None:
+        self.cube.spawn.scale = (0.5, 0.5, 0.5)
+        self.cube.init_state.pos = (0.35, 0.0, 0.040)
+        self.cube_half_extent = 0.025
+        self.cube_rest_center_z = 0.040
+        # Cube rests at z ~= half_extent on the table. Match Franka's pattern:
+        # threshold == rest height so any actual lift starts paying out.
+        self.lifting_min_height = self.cube_half_extent
+        super().__post_init__()

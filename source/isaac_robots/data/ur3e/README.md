@@ -123,6 +123,11 @@ references the official Robotiq **Hand-E** asset from the Isaac Sim library
 (`Isaac/Robots/Robotiq/Hand-E/Robotiq_Hand_E_edit.usd`), assembles it onto
 `tool0`, and saves the combined USD.
 
+Note: the Isaac asset is the **extended Hand-E** variant — its fingers ride on
+guide rails (most visible when the jaws are open). That rail is part of the
+gripper's design, not an asset defect; the finger meshes are within the housing
+footprint (largest finger mesh ~62 mm vs ~86 mm housing).
+
 **Mount orientation:** the Hand-E `base_link` frame does not match the flange
 convention, so the assembler mounts it tilted ~90deg sideways and with the
 coupling ~7.6 cm behind `tool0` (buried in the wrist). The build script's
