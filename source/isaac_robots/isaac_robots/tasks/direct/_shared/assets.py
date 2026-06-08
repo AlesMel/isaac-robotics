@@ -207,6 +207,8 @@ UR3E_ROBOTIQ_HANDE_CFG = UR3E_CFG.copy()
 UR3E_ROBOTIQ_HANDE_CFG.spawn.usd_path = DEFAULT_UR3E_ROBOTIQ_HANDE_USD
 UR3E_ROBOTIQ_HANDE_CFG.spawn.rigid_props.disable_gravity = True
 UR3E_ROBOTIQ_HANDE_CFG.spawn.articulation_props.enabled_self_collisions = False
+# Required by ContactSensorCfg on the finger bodies (table-collision penalty).
+UR3E_ROBOTIQ_HANDE_CFG.spawn.activate_contact_sensors = True
 UR3E_ROBOTIQ_HANDE_CFG.init_state.joint_pos = UR3E_CFG.init_state.joint_pos.copy()
 UR3E_ROBOTIQ_HANDE_CFG.init_state.joint_pos.update(
     {

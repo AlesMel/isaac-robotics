@@ -1,13 +1,15 @@
-"""UR3e cube-lifting task.
+"""UR3e cube-lifting task (Hand-E gripper).
 
-Reward / observation design mirrors Isaac Lab's manager-based Franka lift example
-(``isaaclab_tasks/manager_based/manipulation/lift``). The agent must reach the
-cube, lift it past a threshold, and carry it to a per-episode goal pose. The
-only deviations from that example are the robot (UR3e instead of Franka), the
-action layer (delta TCP via DLS-IK instead of joint position), and the
+Reward / observation design follows Isaac Lab's manager-based Franka lift
+example. The EE frame is a single offset from the ``tool0`` body, analogous to
+Franka's ``panda_hand + (0, 0, 0.1034)`` FrameTransformer. Reward is
+``tanh(distance(EE, cube)/std)`` plus a lift bonus and dense goal tracking --
+no curriculum on the regularisers, no grasp-detection heuristic on the gripper.
+
+The action layer is delta TCP via DLS-IK + a 1-D gripper close command. The
 "UR Base" frame convention (180-deg-about-Z flip between URDF root and the
-convention used in upstream UR scripts) which is applied to delta commands and
-to positions exposed in observations.
+upstream UR convention) is applied to delta commands and to positions exposed
+in the observation.
 """
 
 from __future__ import annotations
@@ -20,10 +22,17 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
 from isaaclab.envs import DirectRLEnv
-from isaaclab.markers import CUBOID_MARKER_CFG, VisualizationMarkers
+from isaaclab.markers import VisualizationMarkers
 from isaaclab.markers.config import FRAME_MARKER_CFG
+from isaaclab.sensors import ContactSensor
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
-from isaaclab.utils.math import matrix_from_quat, quat_inv, sample_uniform, subtract_frame_transforms
+from isaaclab.utils.math import (
+    matrix_from_quat,
+    quat_apply,
+    quat_inv,
+    sample_uniform,
+    subtract_frame_transforms,
+)
 
 from .._shared.grippers import GripperBase
 from .ur3e_lift_cube_env_cfg import UR3eLiftCubeEnvCfg
@@ -93,26 +102,27 @@ class UR3eLiftCubeDirectEnv(DirectRLEnv):
         # vectors): (x, y, z) -> (-x, -y, z).
         self._ur_base_flip = torch.tensor([-1.0, -1.0, 1.0], device=self.device)
 
-        self._gripper.register_graspable_object(
-            self._cube,
-            self._ee_body_id,
-            grasp_offset_w=self._gripper.recommended_grasp_offset_w(cfg.cube_half_extent),
-            surface_normal_w=(0.0, 0.0, 1.0),
-        )
+        # EE-frame offset (tool0-local). Franka analogue: panda_hand + (0,0,0.1034).
+        self._ee_grasp_offset_local = torch.tensor(
+            cfg.ee_grasp_offset_local, dtype=torch.float, device=self.device
+        ).repeat(self.num_envs, 1)
 
         # Per-episode goal position, sampled at reset in "UR Base" frame.
         self._goal_pos_ur = torch.zeros(self.num_envs, 3, device=self.device)
 
+        reward_keys = [
+            "reaching",
+            "lifting",
+            "object_goal",
+            "object_goal_fine",
+            "action_rate",
+            "joint_vel",
+        ]
+        if self._contact_sensor is not None:
+            reward_keys.append("ee_contact")
         self._episode_sums = {
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-            for key in (
-                "reaching",
-                "lifting",
-                "object_goal",
-                "object_goal_fine",
-                "action_rate",
-                "joint_vel",
-            )
+            for key in reward_keys
         }
 
         self.set_debug_vis(self.cfg.debug_vis)
@@ -142,6 +152,12 @@ class UR3eLiftCubeDirectEnv(DirectRLEnv):
 
         self._cube = RigidObject(self.cfg.cube)
         self.scene.rigid_objects["cube"] = self._cube
+
+        if self.cfg.contact_sensor is not None:
+            self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
+            self.scene.sensors["contact_sensor"] = self._contact_sensor
+        else:
+            self._contact_sensor = None
 
         self._gripper.setup_scene()
 
@@ -180,17 +196,14 @@ class UR3eLiftCubeDirectEnv(DirectRLEnv):
 
         self._target_q = torch.clamp(joint_pos_des, self._joint_lower, self._joint_upper)
         self._robot.set_joint_position_target(self._target_q, joint_ids=self._joint_ids)
-        if hasattr(self._gripper, "update_collision_body"):
-            self._gripper.update_collision_body()
-        self._gripper.update_attachment()
 
     # ------------------------------------------------------------------ #
     # Observations
     # ------------------------------------------------------------------ #
     def _get_observations(self) -> dict[str, torch.Tensor]:
-        # Mirrors Franka lift PolicyCfg: joint_pos_rel, joint_vel_rel,
-        # object_position_in_robot_root_frame, target_object_position,
-        # last_action -- plus the gripper's own observation slice.
+        # Franka lift PolicyCfg analogue: joint_pos_rel (6), joint_vel (6),
+        # object_position_in_robot_root_frame (3), target_object_position (3),
+        # last_action (7) plus the gripper observation slice (1 for Hand-E).
         joint_pos_rel = (
             self._robot.data.joint_pos[:, :6] - self._robot.data.default_joint_pos[:, :6]
         )
@@ -215,19 +228,14 @@ class UR3eLiftCubeDirectEnv(DirectRLEnv):
     # ------------------------------------------------------------------ #
     # Rewards / dones
     # ------------------------------------------------------------------ #
-    def _scheduled_reward_weight(self, initial: float, final: float) -> float:
-        if self.cfg.reward_curriculum_steps <= 0:
-            return final
-        if self.common_step_counter > self.cfg.reward_curriculum_steps:
-            return final
-        return initial
-
     def _get_rewards(self) -> torch.Tensor:
-        # ---- reaching: tanh-kernel distance from gripper grasp frame to cube ----
-        distance, _, _ = self._gripper.compute_grasp_metrics()
+        # ---- reaching: tanh-kernel distance from EE frame to cube center ----
+        distance = torch.linalg.norm(
+            self._cube.data.root_pos_w - self._ee_grasp_pos_w(), dim=-1
+        )
         reaching = 1.0 - torch.tanh(distance / self.cfg.reaching_std)
 
-        # ---- lifting: binary, fires once cube clears the rest height ----
+        # ---- lifting: binary, fires once cube clears the lift threshold ----
         cube_height = self._cube_height_env()
         lifted = (cube_height > self.cfg.lifting_min_height).float()
 
@@ -241,34 +249,38 @@ class UR3eLiftCubeDirectEnv(DirectRLEnv):
             1.0 - torch.tanh(goal_distance / self.cfg.goal_tracking_fine_std)
         )
 
-        # ---- regularisers with curriculum ramp ----
+        # ---- regularisers (constant weights) ----
         action_rate_l2 = ((self._actions - self._prev_actions) ** 2).sum(dim=-1)
         joint_vel_l2 = (self._robot.data.joint_vel[:, :6] ** 2).sum(dim=-1)
-        action_rate_weight = self._scheduled_reward_weight(
-            self.cfg.action_rate_l2_weight_initial,
-            self.cfg.action_rate_l2_weight_final,
-        )
-        joint_vel_weight = self._scheduled_reward_weight(
-            self.cfg.joint_vel_l2_weight_initial,
-            self.cfg.joint_vel_l2_weight_final,
-        )
 
         rewards = {
             "reaching": reaching * self.cfg.reaching_weight,
             "lifting": lifted * self.cfg.lifting_weight,
             "object_goal": object_goal * self.cfg.goal_tracking_weight,
             "object_goal_fine": object_goal_fine * self.cfg.goal_tracking_fine_weight,
-            "action_rate": action_rate_l2 * action_rate_weight,
-            "joint_vel": joint_vel_l2 * joint_vel_weight,
+            "action_rate": action_rate_l2 * self.cfg.action_rate_l2_weight,
+            "joint_vel": joint_vel_l2 * self.cfg.joint_vel_l2_weight,
         }
+
+        # EE / table contact penalty. Reads total normal contact force on the
+        # finger bodies (no filter -- table is a static collider; PhysX won't
+        # route filtered contacts through it). Threshold > 2 * effort_limit_sim
+        # so steady cube-grasp forces don't trigger; hard contacts do.
+        if self._contact_sensor is not None:
+            nfw = self._contact_sensor.data.net_forces_w_history  # (N, T, B, 3) or None
+            if nfw is not None:
+                ee_contact_force = torch.max(torch.linalg.norm(nfw, dim=-1), dim=1)[0].sum(dim=-1)
+                excess = torch.clamp(ee_contact_force - self.cfg.ee_contact_penalty_threshold, min=0.0)
+                rewards["ee_contact"] = excess * self.cfg.ee_contact_penalty_weight
+
         for key, value in rewards.items():
             self._episode_sums[key] += value
         return torch.stack(list(rewards.values()), dim=0).sum(dim=0)
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        # Match Franka lift terminations: time_out + cube_dropped only.
-        # Success no longer kills the episode -- goal tracking takes over and
-        # keeps paying out for as long as the cube stays near the target.
+        # Franka lift terminations: time_out + cube_dropped only. Success
+        # doesn't kill the episode -- goal tracking keeps paying out for as
+        # long as the cube stays near the target.
         cube_dropped = self._compute_cube_dropped()
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         return cube_dropped, time_out
@@ -285,11 +297,13 @@ class UR3eLiftCubeDirectEnv(DirectRLEnv):
             log[f"Episode_Reward/{key}"] = torch.mean(sums[env_ids]) / self.max_episode_length_s
             sums[env_ids] = 0.0
 
-        distance, _, _ = self._gripper.compute_grasp_metrics()
         cube_height = self._cube_height_env()
         cube_pos_env = self._cube.data.root_pos_w - self.scene.env_origins
         goal_pos_env = self._goal_pos_ur * self._ur_base_flip
         goal_distance = torch.linalg.norm(cube_pos_env - goal_pos_env, dim=-1)
+        grasp_distance = torch.linalg.norm(
+            self._cube.data.root_pos_w - self._ee_grasp_pos_w(), dim=-1
+        )
 
         log["Episode_Termination/cube_dropped"] = torch.count_nonzero(
             self.reset_terminated[env_ids]
@@ -300,8 +314,7 @@ class UR3eLiftCubeDirectEnv(DirectRLEnv):
             (cube_height[env_ids] > self.cfg.lifting_min_height).float().mean()
         )
         log["Metrics/final_cube_to_goal_distance"] = goal_distance[env_ids].mean()
-        log["Metrics/final_grasp_distance"] = distance[env_ids].mean()
-        log["Metrics/holding_rate"] = self._gripper.is_holding[env_ids].float().mean()
+        log["Metrics/final_grasp_distance"] = grasp_distance[env_ids].mean()
         self.extras["log"] = log
 
         self._robot.reset(env_ids)
@@ -330,8 +343,7 @@ class UR3eLiftCubeDirectEnv(DirectRLEnv):
         self._cube.write_root_pose_to_sim(cube_root_state[:, :7], env_ids=env_ids)
         self._cube.write_root_velocity_to_sim(cube_root_state[:, 7:], env_ids=env_ids)
 
-        # Sample a per-episode lift target in "UR Base" frame (mirrors
-        # UniformPoseCommand with resampling_time_range == episode_length_s).
+        # Sample a per-episode lift target in "UR Base" frame.
         goal_ur = torch.zeros(n, 3, device=self.device)
         goal_ur[:, 0] = sample_uniform(*self.cfg.goal_pos_x_range, (n,), self.device)
         goal_ur[:, 1] = sample_uniform(*self.cfg.goal_pos_y_range, (n,), self.device)
@@ -379,11 +391,14 @@ class UR3eLiftCubeDirectEnv(DirectRLEnv):
     def _compute_cube_dropped(self) -> torch.Tensor:
         return self._cube_height_env() < self.cfg.cube_drop_height
 
-    def _grasp_point_w(self) -> torch.Tensor:
-        offset = self._gripper.recommended_grasp_offset_w(self.cfg.cube_half_extent)
-        return self._cube.data.root_pos_w + torch.tensor(
-            offset, dtype=torch.float, device=self.device
-        )
+    def _ee_grasp_pos_w(self) -> torch.Tensor:
+        """World-frame EE grasp point = ``tool0`` + cfg offset, rotated by tool0's quat.
+
+        Franka analogue: ``FrameTransformer(panda_hand, offset=(0,0,0.1034))``.
+        """
+        tool0_pos_w = self._robot.data.body_pos_w[:, self._ee_body_id]
+        tool0_quat_w = self._robot.data.body_quat_w[:, self._ee_body_id]
+        return tool0_pos_w + quat_apply(tool0_quat_w, self._ee_grasp_offset_local)
 
     def _goal_pos_w(self) -> torch.Tensor:
         return self._goal_pos_ur * self._ur_base_flip + self.scene.env_origins
@@ -393,31 +408,28 @@ class UR3eLiftCubeDirectEnv(DirectRLEnv):
     # ------------------------------------------------------------------ #
     def _set_debug_vis_impl(self, debug_vis: bool) -> None:
         if debug_vis:
-            if not hasattr(self, "_grasp_visualizer"):
-                marker_cfg = CUBOID_MARKER_CFG.copy()
-                marker_cfg.markers["cuboid"].size = (0.025, 0.025, 0.025)
-                marker_cfg.prim_path = "/Visuals/Command/ur3e_lift_cube_grasp"
-                self._grasp_visualizer = VisualizationMarkers(marker_cfg)
+            if not hasattr(self, "_ee_visualizer"):
+                ee_cfg = FRAME_MARKER_CFG.copy()
+                ee_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
+                ee_cfg.prim_path = "/Visuals/Command/ur3e_lift_cube_ee"
+                self._ee_visualizer = VisualizationMarkers(ee_cfg)
             if not hasattr(self, "_goal_visualizer"):
                 goal_cfg = FRAME_MARKER_CFG.copy()
                 goal_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
                 goal_cfg.prim_path = "/Visuals/Command/ur3e_lift_cube_goal"
                 self._goal_visualizer = VisualizationMarkers(goal_cfg)
-            self._grasp_visualizer.set_visibility(True)
+            self._ee_visualizer.set_visibility(True)
             self._goal_visualizer.set_visibility(True)
-            if hasattr(self._gripper, "set_debug_vis"):
-                self._gripper.set_debug_vis(True)
         else:
-            if hasattr(self, "_grasp_visualizer"):
-                self._grasp_visualizer.set_visibility(False)
+            if hasattr(self, "_ee_visualizer"):
+                self._ee_visualizer.set_visibility(False)
             if hasattr(self, "_goal_visualizer"):
                 self._goal_visualizer.set_visibility(False)
-            if hasattr(self._gripper, "set_debug_vis"):
-                self._gripper.set_debug_vis(False)
 
     def _debug_vis_callback(self, event) -> None:
         del event
-        self._grasp_visualizer.visualize(self._grasp_point_w())
+        # Weakref-proxied event tap; can fire once after scene tear-down at end-of-run.
+        if getattr(self, "scene", None) is None:
+            return
+        self._ee_visualizer.visualize(self._ee_grasp_pos_w())
         self._goal_visualizer.visualize(self._goal_pos_w())
-        if hasattr(self._gripper, "visualize"):
-            self._gripper.visualize()
