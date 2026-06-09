@@ -1,0 +1,11 @@
+# Ignore all raw results; structure is recreated by scripts/run_sweep.sh
+runs/
+eval/
+plots/
+tables/
+
+# Keep the directory structure
+!runs/.gitkeep
+!eval/.gitkeep
+!plots/.gitkeep
+!tables/.gitkeep

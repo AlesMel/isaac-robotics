@@ -1,0 +1,70 @@
+{
+  "cells": [
+    {
+      "task": "ur3e_lift",
+      "kernel": "tanh",
+      "seed": 0,
+      "train_status": "fail(rc=1)",
+      "eval_status": "no_checkpoint"
+    },
+    {
+      "task": "ur3e_lift",
+      "kernel": "tanh",
+      "seed": 1,
+      "train_status": "fail(rc=1)",
+      "eval_status": "no_checkpoint"
+    },
+    {
+      "task": "ur3e_lift",
+      "kernel": "gaussian",
+      "seed": 0,
+      "train_status": "fail(rc=1)",
+      "eval_status": "no_checkpoint"
+    },
+    {
+      "task": "ur3e_lift",
+      "kernel": "gaussian",
+      "seed": 1,
+      "train_status": "fail(rc=1)",
+      "eval_status": "no_checkpoint"
+    },
+    {
+      "task": "ur3e_lift",
+      "kernel": "velocity_gated_tanh",
+      "seed": 0,
+      "train_status": "fail(rc=1)",
+      "eval_status": "no_checkpoint"
+    },
+    {
+      "task": "ur3e_lift",
+      "kernel": "velocity_gated_tanh",
+      "seed": 1,
+      "train_status": "fail(rc=1)",
+      "eval_status": "no_checkpoint"
+    }
+  ],
+  "config": {
+    "tasks": [
+      "ur3e_lift"
+    ],
+    "kernels": [
+      "tanh",
+      "gaussian",
+      "velocity_gated_tanh"
+    ],
+    "seeds": [
+      0,
+      1
+    ],
+    "num_envs": 4096,
+    "max_iterations": 5000,
+    "eval_only": false,
+    "skip_eval": false,
+    "eval_num_envs": 64,
+    "eval_num_episodes": 100,
+    "force": false,
+    "record_video_train": true,
+    "video_length": 500,
+    "video_interval": 2000
+  }
+}

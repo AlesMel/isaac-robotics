@@ -1,0 +1,39 @@
+# Default sweep config: 2 tasks × 3 kernels × 5 seeds = 30 training runs.
+# ~10 GPU-hours on RTX 4070 Ti at 8192 envs (UR3e) / 4096 envs (Franka).
+
+tasks:
+  - franka_lift
+  - ur3e_lift
+
+kernels:
+  - tanh
+  - gaussian
+  - velocity_gated_tanh
+
+seeds: [0, 1, 2, 3, 4]
+
+# Uses each task's default num_envs (Franka 4096, UR3e 8192).
+num_envs: null
+
+# Uses each task's default training timestep budget (Franka 36000, UR3e 300000).
+max_iterations: null
+
+# Phases
+eval_only: false
+skip_eval: false
+eval_num_envs: 64
+eval_num_episodes: 100
+
+# Set to true to force retraining even when best_agent.pt already exists.
+force: false
+
+# --- Training video recording ---
+# Off by default for the full sweep (30 runs * many video clips per run ->
+# large disk footprint; ~10-20% training overhead). Turn on for ablation
+# sweeps or qualitative analysis.
+#
+# When enabled, videos save to:
+#   results/runs/<task>/<kernel>/seed_<N>/<skrl_timestamp_dir>/videos/train/*.mp4
+record_video_train: false
+video_length: 500       # frames per clip (~10s at 50Hz policy / 25fps render)
+video_interval: 5000    # record one clip every N env steps

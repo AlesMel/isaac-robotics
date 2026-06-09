@@ -1,0 +1,31 @@
+# Quick smoke-test sweep: 1 task × 3 kernels × 2 seeds = 6 training runs.
+# ~2 GPU-hours on RTX 4070 Ti. For validating the pipeline end-to-end before
+# the full publication sweep.
+
+tasks:
+  - ur3e_lift
+
+kernels:
+  - tanh
+  - gaussian
+  - velocity_gated_tanh
+
+seeds: [0, 1]
+
+num_envs: 4096      # smaller than default 8192 to fit in 2 hrs
+max_iterations: 5000  # shorter run for smoke-test only
+
+eval_only: false
+skip_eval: false
+eval_num_envs: 32
+eval_num_episodes: 50
+
+force: false
+
+# --- Training video recording ---
+# Enabled by default in the quick (smoke-test) config so you can visually
+# confirm the policies are doing something sensible before committing to the
+# 10-hour full sweep. Records every 2k env steps; ~5 clips per run.
+record_video_train: true
+video_length: 500
+video_interval: 2000
