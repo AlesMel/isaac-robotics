@@ -3,7 +3,7 @@
 #
 # Usage:
 #   bash scripts/run_sweep.sh                          # default config
-#   bash scripts/run_sweep.sh configs/sweep_quick.yaml # smoke test
+#   bash scripts/run_sweep.sh configs/sweep_smoke.yaml # smoke test
 #
 # Assumes the env_isaaclab conda environment is active and the benchmarks
 # package is importable (run from this benchmark's root, or set PYTHONPATH).

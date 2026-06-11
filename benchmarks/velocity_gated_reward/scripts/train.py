@@ -31,6 +31,7 @@ registration, control returns to train.py untouched.
 from __future__ import annotations
 
 import builtins
+import re
 import runpy
 import sys
 from pathlib import Path
@@ -41,6 +42,85 @@ _BENCH_DIR = _REPO_ROOT / "benchmarks" / "velocity_gated_reward"
 # Make velgate_bench importable.
 if str(_BENCH_DIR) not in sys.path:
     sys.path.insert(0, str(_BENCH_DIR))
+
+
+# ---------------------------------------------------------------------------
+# Banner: print a big visible header at the start of every train.log so the
+# user can tell at a glance which (task, kernel, seed) cell is running. The
+# banner is parsed from sys.argv (--task, --seed) before train.py touches it.
+# ---------------------------------------------------------------------------
+
+_KERNEL_SUMMARY = {
+    "Tanh": (
+        "tanh",
+        "R(d) = (1 - tanh(d / 0.05))",
+        "BASELINE - tanh has nonzero gradient at d=0; expect limit cycle at goal hold",
+    ),
+    "Gaussian": (
+        "gaussian",
+        "R(d) = exp(-(d / 0.05)^2)",
+        "AVOID - zero gradient at d=0; expect late-stage drift after peak",
+    ),
+    "VelocityGatedTanh": (
+        "velocity_gated_tanh",
+        "R(d, qdot) = (1 - tanh(d/0.05)) * inside_gate(d<0.10) * clip(1 - |qdot|/0.5, 0, 1)",
+        "OUR PROPOSAL - tanh centering pull preserved + velocity gate penalizes own oscillation",
+    ),
+    "TanhAdditiveVelPen": (
+        "tanh_additive_velpen",
+        "R(d, qdot) = (1 - tanh(d/0.05)) - 1.0 * 1[d<0.10] * clip(|qdot|/0.5, 0, 1)",
+        "BASELINE - additive counterpart of the multiplicative velocity gate",
+    ),
+    "VelocityGatedTanhSmooth": (
+        "velocity_gated_tanh_smooth",
+        "R(d, qdot) = (1 - tanh(d/0.05)) * G_smooth, gate blend sigmoid((0.10 - d)/0.02)",
+        "ABLATION - velocity gate with smooth (sigmoid) neighborhood boundary",
+    ),
+}
+
+
+def _print_banner() -> None:
+    argv = sys.argv
+    task = None
+    seed = None
+    num_envs = None
+    for i, a in enumerate(argv):
+        if a == "--task" and i + 1 < len(argv):
+            task = argv[i + 1]
+        elif a == "--seed" and i + 1 < len(argv):
+            seed = argv[i + 1]
+        elif a == "--num_envs" and i + 1 < len(argv):
+            num_envs = argv[i + 1]
+
+    if not task:
+        return  # not a sweep cell; skip banner
+
+    # Extract robot, kernel from task name. e.g. Velgate-Bench-Franka-Lift-Tanh-v0
+    # NOTE: longer alternatives must come first, otherwise VelocityGatedTanhSmooth
+    # would partially match VelocityGatedTanh and leave "-Smooth-v0" dangling.
+    kernel_alt = "|".join(sorted(_KERNEL_SUMMARY, key=len, reverse=True))
+    m = re.match(rf"Velgate-Bench-(.+?)-Lift-({kernel_alt})-v0", task)
+    if not m:
+        return
+    robot_display, kernel_display = m.group(1), m.group(2)
+    kernel_name, formula, expected = _KERNEL_SUMMARY[kernel_display]
+
+    line = "=" * 80
+    bar = "+" + "-" * 78 + "+"
+    print(line, file=sys.stderr, flush=True)
+    print(f"  VELGATE BENCH CELL", file=sys.stderr, flush=True)
+    print(bar, file=sys.stderr, flush=True)
+    print(f"  Task         : {task}", file=sys.stderr, flush=True)
+    print(f"  Robot        : {robot_display}", file=sys.stderr, flush=True)
+    print(f"  KERNEL       : {kernel_name}   ({kernel_display})", file=sys.stderr, flush=True)
+    print(f"  Seed         : {seed}", file=sys.stderr, flush=True)
+    print(f"  num_envs     : {num_envs}", file=sys.stderr, flush=True)
+    print(f"  Reward fn    : {formula}", file=sys.stderr, flush=True)
+    print(f"  Expectation  : {expected}", file=sys.stderr, flush=True)
+    print(line, file=sys.stderr, flush=True)
+
+
+_print_banner()
 
 # Install a post-import hook on isaac_robots.tasks. After that module
 # finishes loading, we trigger our benchmark's gym registrations. The hook

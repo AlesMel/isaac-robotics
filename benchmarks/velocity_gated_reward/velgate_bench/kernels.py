@@ -3,9 +3,14 @@
 
 """Reward kernels under comparison in the velocity-gated reward benchmark.
 
-All three kernels share the same signature and the same lifted-gate
-condition. They differ ONLY in how they shape the reward as a function of
-goal distance (and, for the velocity-gated kernel, joint velocity).
+All kernels share the same signature and the same lifted-gate condition.
+They differ ONLY in how they shape the reward as a function of goal
+distance (and, for the velocity-aware kernels, joint velocity). Besides the
+three core kernels below, the registry also includes two hardening
+conditions: ``tanh_additive_velpen`` (additive distance-gated velocity
+penalty -- the natural competing baseline to multiplicative gating) and
+``velocity_gated_tanh_smooth`` (sigmoid-blended gate boundary -- ablation of
+the hard neighborhood indicator).
 
 Kernel definitions
 ------------------
@@ -194,6 +199,93 @@ def velocity_gated_tanh_kernel(
 
 
 # -----------------------------------------------------------------------------
+# Kernel 4: tanh + additive distance-gated velocity penalty (baseline)
+# -----------------------------------------------------------------------------
+
+
+def tanh_additive_velpen_kernel(
+    env: "ManagerBasedRLEnv",
+    std: float,
+    minimal_height: float,
+    command_name: str,
+    velocity_thresh: float = 0.5,
+    neighborhood: float = 0.10,
+    penalty_scale: float = 1.0,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+) -> torch.Tensor:
+    """tanh tracking MINUS an additive velocity penalty inside the neighborhood.
+
+    The additive counterpart of ``velocity_gated_tanh_kernel``: instead of
+    multiplying the tracking reward by the velocity gate, it subtracts a
+    distance-gated velocity penalty. This is the natural competing baseline
+    ("would a plain penalty do just as well as multiplicative gating?").
+
+    Shares every parameter with the multiplicative variant so the two are
+    head-to-head comparable; ``penalty_scale=1.0`` matches the penalty range
+    to the tracking term's [0, 1] so neither formulation is magnitude-
+    handicapped. The penalty saturates at ``velocity_thresh`` (clip to 1) so
+    its scale stays commensurate with the gate.
+    """
+    distance, lifted = _distance_and_lifted(
+        env, minimal_height, command_name, robot_cfg, object_cfg
+    )
+
+    tracking = 1.0 - torch.tanh(distance / std)
+
+    robot: Articulation = env.scene[robot_cfg.name]
+    joint_vels = robot.data.joint_vel[:, robot_cfg.joint_ids]
+    joint_vel_mag = torch.norm(joint_vels, dim=1)
+    vel_penalty = torch.clamp(joint_vel_mag / velocity_thresh, min=0.0, max=1.0)
+
+    inside = (distance < neighborhood).float()
+
+    return lifted.float() * (tracking - penalty_scale * inside * vel_penalty)
+
+
+# -----------------------------------------------------------------------------
+# Kernel 5: velocity-gated tanh with smooth (sigmoid) neighborhood blend
+# -----------------------------------------------------------------------------
+
+
+def velocity_gated_tanh_smooth_kernel(
+    env: "ManagerBasedRLEnv",
+    std: float,
+    minimal_height: float,
+    command_name: str,
+    velocity_thresh: float = 0.5,
+    neighborhood: float = 0.10,
+    tau: float = 0.02,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+) -> torch.Tensor:
+    """Ablation of ``velocity_gated_tanh_kernel`` with a smooth gate boundary.
+
+    The hard indicator ``1[d < neighborhood]`` creates a reward discontinuity
+    at the neighborhood radius (entering at speed makes the reward drop
+    abruptly), which in principle admits a boundary-orbiting local optimum.
+    Here the indicator is replaced by ``sigmoid((neighborhood - d) / tau)``,
+    which blends from 0 (far) to 1 (at goal) over a band of width ~``tau``
+    around the radius. With ``tau -> 0`` this reduces to the hard variant.
+    """
+    distance, lifted = _distance_and_lifted(
+        env, minimal_height, command_name, robot_cfg, object_cfg
+    )
+
+    tracking = 1.0 - torch.tanh(distance / std)
+
+    robot: Articulation = env.scene[robot_cfg.name]
+    joint_vels = robot.data.joint_vel[:, robot_cfg.joint_ids]
+    joint_vel_mag = torch.norm(joint_vels, dim=1)
+    vel_factor = torch.clamp(1.0 - joint_vel_mag / velocity_thresh, min=0.0, max=1.0)
+
+    inside = torch.sigmoid((neighborhood - distance) / tau)
+    gate = inside * vel_factor + (1.0 - inside) * 1.0
+
+    return lifted.float() * tracking * gate
+
+
+# -----------------------------------------------------------------------------
 # Registry: name -> (function, default params override)
 # -----------------------------------------------------------------------------
 
@@ -204,6 +296,14 @@ KERNELS = {
     "velocity_gated_tanh": (
         velocity_gated_tanh_kernel,
         {"velocity_thresh": 0.5, "neighborhood": 0.10},
+    ),
+    "tanh_additive_velpen": (
+        tanh_additive_velpen_kernel,
+        {"velocity_thresh": 0.5, "neighborhood": 0.10, "penalty_scale": 1.0},
+    ),
+    "velocity_gated_tanh_smooth": (
+        velocity_gated_tanh_smooth_kernel,
+        {"velocity_thresh": 0.5, "neighborhood": 0.10, "tau": 0.02},
     ),
 }
 """Map from kernel name -> (function, default kwargs to inject into RewTerm.params)."""

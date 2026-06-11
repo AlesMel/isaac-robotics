@@ -1,0 +1,43 @@
+# Smoke test: gate for the full benchmark. franka only, ALL 5 kernels x
+# 1 seed at a tiny budget (~10-15 min/cell incl. startup -> ~75 min total).
+#
+# What it must prove before any multi-day sweep is launched:
+#   1. ++agent.trainer.timesteps lands: params/agent.yaml shows
+#      trainer.timesteps: 10000 (NOT 10000 * rollouts).
+#   2. ++agent.agent.experiment.write_interval lands: ~100 TB points.
+#   3. Both new kernels (tanh_additive_velpen, velocity_gated_tanh_smooth)
+#      register, train, and eval end-to-end.
+#   4. Eval JSON contains hold_obj_goal_dist_mean_mean (key assumed by
+#      analyze.load_cell).
+#   5. analyze.py produces p_holm columns, the IQM/CI table, and the
+#      success-rate pareto plot without errors.
+# After the gate passes, archive results/runs and start sweep_franka.yaml.
+
+tasks:
+  - franka_lift
+
+kernels:
+  - tanh
+  - gaussian
+  - velocity_gated_tanh
+  - tanh_additive_velpen
+  - velocity_gated_tanh_smooth
+
+seeds: [0]
+
+num_envs: 1024
+max_timesteps: 10000
+tb_write_interval: 100   # -> ~100 TB points even at the tiny budget
+
+eval_only: false
+skip_eval: false
+eval_num_envs: 32
+eval_num_episodes: 32
+
+train_timeout_s: 3600    # 1 h ceiling per cell
+eval_timeout_s: 1200
+
+force: false
+record_video_train: false
+video_length: 300
+video_interval: 10000

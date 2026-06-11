@@ -1,0 +1,10 @@
+# Sweep runtime artifacts
+*.out
+*.pid
+nohup.out
+
+# Hydra per-invocation output dirs (created in CWD by train.py subprocesses)
+outputs/
+
+# Generated presentation artifacts (regenerable via scripts/make_presentation.py)
+*.pptx

@@ -1,0 +1,47 @@
+# Optional qualitative-video pass: 1 seed per (task, kernel) with training
+# video recording ON. Run LAST, after the benchmark matrix completes -- video
+# rendering adds 10-20% overhead and was correlated with a kit crash-dialog
+# hang, so it is kept out of the quantitative runs. Uses seed 99 so it can
+# never collide with (or overwrite) a benchmark cell.
+
+tasks:
+  - franka_lift
+  - ur3e_lift
+
+kernels:
+  - tanh
+  - gaussian
+  - velocity_gated_tanh
+  - tanh_additive_velpen
+
+kernels_per_task:
+  franka_lift:
+    - tanh
+    - gaussian
+    - velocity_gated_tanh
+    - tanh_additive_velpen
+    - velocity_gated_tanh_smooth
+  ur3e_lift:
+    - tanh
+    - gaussian
+    - velocity_gated_tanh
+    - tanh_additive_velpen
+
+seeds: [99]
+
+num_envs: null
+max_timesteps: null
+tb_write_interval: 500
+
+eval_only: false
+skip_eval: true          # quantitative eval comes from the main matrix
+eval_num_envs: 64
+eval_num_episodes: 100
+
+train_timeout_s: 28800
+eval_timeout_s: 1800
+
+force: false
+record_video_train: true
+video_length: 300        # ~12 s at 25 fps
+video_interval: 10000

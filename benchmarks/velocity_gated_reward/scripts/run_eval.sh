@@ -5,7 +5,7 @@
 #
 # Usage:
 #   bash scripts/run_eval.sh                          # default config
-#   bash scripts/run_eval.sh configs/sweep_quick.yaml
+#   bash scripts/run_eval.sh configs/sweep_smoke.yaml
 
 set -euo pipefail
 

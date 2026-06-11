@@ -1,0 +1,34 @@
+# Phase 2: ur3e_lift only. 4 kernels x 5 seeds = 20 cells (no smooth-gate
+# ablation on ur3e -- compute budget), ~3-6h each at 300k trainer timesteps
+# -> ~3-5 days wall clock. Run after sweep_franka.yaml.
+# Restartable: completed cells (best_agent.pt present) are skipped.
+
+tasks:
+  - ur3e_lift
+
+kernels:
+  - tanh
+  - gaussian
+  - velocity_gated_tanh
+  - tanh_additive_velpen
+
+seeds: [0, 1, 2, 3, 4]
+
+num_envs: null           # ur3e default 8192
+max_timesteps: null      # ur3e default 300_000 trainer timesteps
+tb_write_interval: 500   # -> 600 TB points per run
+
+eval_only: false
+skip_eval: false
+eval_num_envs: 64
+eval_num_episodes: 100
+
+train_timeout_s: 28800   # 8 h (learning seeds take ~6h; 2h margin)
+eval_timeout_s: 1800
+
+force: false
+# Videos ON: one clip every 10% of the 300k budget (interval auto = 30_000
+# -> ~11 clips/run). Watchdog caps render-crash cost at ~30s.
+record_video_train: true
+video_length: 300        # ~12s at 25fps
+video_interval: null     # auto: max_timesteps // 10

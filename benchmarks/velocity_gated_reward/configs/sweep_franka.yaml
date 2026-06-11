@@ -1,0 +1,35 @@
+# Phase 1: franka_lift only. 5 kernels x 5 seeds = 25 cells, ~3h each at
+# 500k trainer timesteps -> ~3 days wall clock. Run before sweep_ur3e.yaml.
+# Restartable: completed cells (best_agent.pt present) are skipped.
+
+tasks:
+  - franka_lift
+
+kernels:
+  - tanh
+  - gaussian
+  - velocity_gated_tanh
+  - tanh_additive_velpen
+  - velocity_gated_tanh_smooth
+
+seeds: [0, 1, 2, 3, 4]
+
+num_envs: null           # franka default 4096
+max_timesteps: null      # franka default 500_000 trainer timesteps
+tb_write_interval: 500   # -> 1000 TB points per run
+
+eval_only: false
+skip_eval: false
+eval_num_envs: 64
+eval_num_episodes: 100
+
+train_timeout_s: 28800   # 8 h (expected ~3h; ceiling for hangs)
+eval_timeout_s: 1800
+
+force: false
+# Videos ON: one clip every 10% of the 500k budget (interval auto = 50_000
+# -> ~11 clips/run, ~165MB/run). The kit-crash watchdog caps the cost of a
+# render crash at ~30s instead of the 8h timeout.
+record_video_train: true
+video_length: 300        # ~12s at 25fps
+video_interval: null     # auto: max_timesteps // 10

@@ -49,7 +49,7 @@ agent:
   state_preprocessor_kwargs: null
   value_preprocessor: RunningStandardScaler
   value_preprocessor_kwargs: null
-  random_timesteps: 0
+  random_timesteps: 5000  # pure random exploration before PPO kicks in; reaching_object reward is near-zero when arm starts far from cube (1-tanh(0.3/0.1)~=0.005), so without this PPO learns to stand still -- only lucky weight inits converge (observed 3/5 seeds flat)
   learning_starts: 0
   grad_norm_clip: 1.0
   ratio_clip: 0.2

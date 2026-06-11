@@ -61,17 +61,38 @@ def parse_tb_reward_curve(log_dir: Path, tag: str = "Reward / Total reward (mean
 
 
 def summarize_tb(log_dir: Path) -> dict:
-    """Compute peak/final/drift metrics from a TB log."""
+    """Compute peak/final/drift metrics from a TB log.
+
+    Definitions (robust against curve noise and sparse logging):
+
+    - The curve is first smoothed with a centered rolling mean over ~5% of
+      the points. Taking ``max`` of the RAW curve would be biased upward
+      (max-of-noise), inflating drift even for a flat noisy curve.
+    - ``peak_reward``: max of the smoothed curve.
+    - ``final_reward``: mean of smoothed values in the last 10% of
+      TIMESTEPS (not points -- sparse logs once made "last 10% of points"
+      a single sample).
+    - ``drift_ratio``: (peak - final) / peak.
+    - Curves with fewer than 20 points cannot support these estimates;
+      drift is reported as NaN rather than a silently garbage value.
+    """
     steps, vals = parse_tb_reward_curve(log_dir)
-    if len(vals) == 0:
+    n = int(len(vals))
+    if n == 0:
         return {"peak_reward": float("nan"), "final_reward": float("nan"),
                 "drift_ratio": float("nan"), "n_points": 0}
-    peak = float(np.max(vals))
-    tail_n = max(1, len(vals) // 10)
-    final = float(np.mean(vals[-tail_n:]))
+    if n < 20:
+        return {"peak_reward": float(np.max(vals)), "final_reward": float(vals[-1]),
+                "drift_ratio": float("nan"), "n_points": n}
+    w = max(1, round(0.05 * n))
+    smooth = np.convolve(vals, np.ones(w) / w, mode="valid")
+    smooth_steps = steps[(w - 1) // 2:(w - 1) // 2 + len(smooth)]
+    peak = float(np.max(smooth))
+    tail = smooth[smooth_steps >= 0.9 * steps.max()]
+    final = float(np.mean(tail)) if len(tail) else float(smooth[-1])
     drift = (peak - final) / peak if peak > 0 else 0.0
     return {"peak_reward": peak, "final_reward": final, "drift_ratio": float(drift),
-            "n_points": int(len(vals))}
+            "n_points": n}
 
 
 # -----------------------------------------------------------------------------
@@ -104,6 +125,9 @@ def load_cell(task: str, kernel: str, seed: int, results_dir: Path) -> dict:
         "eval_hold_joint_vel_l2_mean": eval_data.get("hold_joint_vel_l2_mean", float("nan")),
         "eval_hold_joint_vel_l2_std": eval_data.get("hold_joint_vel_l2_std", float("nan")),
         "eval_hold_ee_z_std_mean": eval_data.get("hold_ee_z_std_mean", float("nan")),
+        # Per-episode key is "hold_obj_goal_dist_mean"; aggregate_metrics in
+        # metrics.py suffixes it again, hence the double "_mean".
+        "eval_hold_obj_goal_dist_mean": eval_data.get("hold_obj_goal_dist_mean_mean", float("nan")),
         "eval_success_mean": eval_data.get("success_mean", float("nan")),
         "eval_time_at_goal_s_mean": eval_data.get("time_at_goal_s_mean", float("nan")),
     }
@@ -127,6 +151,11 @@ def aggregate_across_seeds(cells: list[dict]) -> list[dict]:
             vals = np.asarray([s[key] for s in seeds if not _is_nan(s[key])], dtype=float)
             row[f"{key}_mean"] = float(np.mean(vals)) if len(vals) else float("nan")
             row[f"{key}_std"] = float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0
+            if key in _HEADLINE_METRICS:
+                row[f"{key}_iqm"] = iqm(vals)
+                ci_lo, ci_hi = bootstrap_ci(vals)
+                row[f"{key}_ci_lo"] = ci_lo
+                row[f"{key}_ci_hi"] = ci_hi
         rows.append(row)
     return rows
 
@@ -141,6 +170,54 @@ def _is_nan(v) -> bool:
 # -----------------------------------------------------------------------------
 # Statistical tests
 # -----------------------------------------------------------------------------
+
+
+# Headline metrics that additionally get IQM + 95% bootstrap CI columns in
+# the aggregate table (rliable-style robust aggregates over seeds).
+_HEADLINE_METRICS = ("eval_success_mean", "eval_hold_joint_vel_l2_mean", "tb_drift_ratio")
+
+
+def iqm(values) -> float:
+    """Interquartile mean: mean of the middle 50% of sorted values.
+
+    More robust than the mean for small-n RL seed aggregates (Agarwal et al.,
+    "Deep RL at the Edge of the Statistical Precipice", NeurIPS 2021).
+    """
+    v = np.sort(np.asarray(values, dtype=float))
+    n = len(v)
+    if n == 0:
+        return float("nan")
+    lo, hi = int(np.floor(n * 0.25)), int(np.ceil(n * 0.75))
+    trimmed = v[lo:hi]
+    return float(np.mean(trimmed)) if len(trimmed) else float(np.mean(v))
+
+
+def bootstrap_ci(values, stat=iqm, n_boot: int = 10_000, alpha: float = 0.05,
+                 seed: int = 0) -> tuple[float, float]:
+    """Percentile bootstrap CI for ``stat`` over ``values`` (seeded for repro)."""
+    v = np.asarray(values, dtype=float)
+    if len(v) == 0:
+        return float("nan"), float("nan")
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(v), size=(n_boot, len(v)))
+    samples = np.asarray([stat(v[row]) for row in idx])
+    return (float(np.quantile(samples, alpha / 2)),
+            float(np.quantile(samples, 1 - alpha / 2)))
+
+
+def holm_bonferroni(pvals: list[float]) -> list[float]:
+    """Holm-Bonferroni adjusted p-values (step-down), order-preserving."""
+    m = len(pvals)
+    if m == 0:
+        return []
+    p = np.asarray(pvals, dtype=float)
+    order = np.argsort(p)
+    adj = np.empty(m)
+    running = 0.0
+    for rank, i in enumerate(order):
+        running = max(running, (m - rank) * p[i])
+        adj[i] = min(1.0, running)
+    return adj.tolist()
 
 
 def cohens_d(a: np.ndarray, b: np.ndarray) -> float:
@@ -207,18 +284,70 @@ def write_csv(rows: list[dict], path: Path) -> None:
         writer.writerows(rows)
 
 
+# The pairwise test family. Every (comparison, task) p-value computed from
+# these specs forms ONE family for Holm-Bonferroni correction; verdicts in
+# results.md use the adjusted p. Eval-rollout metrics are primary -- training
+# reward is kernel-specific (each kernel CHANGES the reward function) and is
+# reported descriptively only.
+COMPARISONS: list[dict] = [
+    dict(title="H1a: Success rate, velgated vs tanh (higher is better)",
+         metric="eval_success_mean", candidate="velocity_gated_tanh", baseline="tanh", lower_is_better=False),
+    dict(title="H1a: Success rate, velgated vs gaussian (higher is better)",
+         metric="eval_success_mean", candidate="velocity_gated_tanh", baseline="gaussian", lower_is_better=False),
+    dict(title="H1a: Hold distance to goal (m), velgated vs tanh (lower is better)",
+         metric="eval_hold_obj_goal_dist_mean", candidate="velocity_gated_tanh", baseline="tanh", lower_is_better=True),
+    dict(title="H1a: Time at goal (s), velgated vs tanh (higher is better)",
+         metric="eval_time_at_goal_s_mean", candidate="velocity_gated_tanh", baseline="tanh", lower_is_better=False),
+    dict(title="H1b: Hold joint velocity (rad/s), velgated vs tanh (lower is better)",
+         metric="eval_hold_joint_vel_l2_mean", candidate="velocity_gated_tanh", baseline="tanh", lower_is_better=True),
+    dict(title="H1c: Drift ratio, velgated vs gaussian (lower is better)",
+         metric="tb_drift_ratio", candidate="velocity_gated_tanh", baseline="gaussian", lower_is_better=True),
+    dict(title="Baseline: Success rate, velgated vs additive velocity penalty (higher is better)",
+         metric="eval_success_mean", candidate="velocity_gated_tanh", baseline="tanh_additive_velpen", lower_is_better=False),
+    dict(title="Baseline: Hold joint velocity, velgated vs additive velocity penalty (lower is better)",
+         metric="eval_hold_joint_vel_l2_mean", candidate="velocity_gated_tanh", baseline="tanh_additive_velpen", lower_is_better=True),
+    dict(title="Ablation: Success rate, smooth vs hard gate (higher is better)",
+         metric="eval_success_mean", candidate="velocity_gated_tanh_smooth", baseline="velocity_gated_tanh", lower_is_better=False),
+    dict(title="Ablation: Hold joint velocity, smooth vs hard gate (lower is better)",
+         metric="eval_hold_joint_vel_l2_mean", candidate="velocity_gated_tanh_smooth", baseline="velocity_gated_tanh", lower_is_better=True),
+]
+
+
+def run_comparisons(cells: list[dict]) -> list[dict]:
+    """Compute all COMPARISONS, then apply Holm-Bonferroni across the family.
+
+    Returns the spec list with a ``stats`` dict (per task) attached; each
+    non-skipped entry gains a ``p_holm`` field.
+    """
+    results = []
+    flat_refs: list[dict] = []
+    for spec in COMPARISONS:
+        stats = pairwise_stats(cells, spec["metric"],
+                               baseline_kernel=spec["baseline"],
+                               candidate_kernel=spec["candidate"])
+        results.append({**spec, "stats": stats})
+        for st in stats.values():
+            if not st.get("skipped") and not _is_nan(st.get("p_value", float("nan"))):
+                flat_refs.append(st)
+    adjusted = holm_bonferroni([st["p_value"] for st in flat_refs])
+    for st, p_adj in zip(flat_refs, adjusted):
+        st["p_holm"] = p_adj
+    return results
+
+
 def write_results_md(
     aggregates: list[dict],
-    stats_peak: dict,
-    stats_drift: dict,
-    stats_hold_vel: dict,
+    comparisons: list[dict],
     out_path: Path,
 ) -> None:
     lines = ["# Velocity-Gated Reward Benchmark — Results\n"]
     lines.append("*Auto-generated by `velgate_bench.analyze`. Do not edit by hand.*\n")
 
     lines.append("## Aggregate (mean ± std across seeds)\n")
-    lines.append("| Task | Kernel | n | Peak reward | Drift ratio | Hold joint vel (L2, rad/s) | Success rate |")
+    lines.append("*Peak reward is in kernel-specific units (each kernel changes the "
+                 "reward function) — do not compare it across kernels; eval columns "
+                 "are kernel-independent.*\n")
+    lines.append("| Task | Kernel | n | Peak reward† | Drift ratio | Hold joint vel (L2, rad/s) | Success rate |")
     lines.append("|---|---|---|---|---|---|---|")
     for r in sorted(aggregates, key=lambda x: (x["task"], x["kernel"])):
         lines.append(
@@ -228,38 +357,56 @@ def write_results_md(
             f"{r.get('eval_hold_joint_vel_l2_mean_mean', float('nan')):.3f} ± {r.get('eval_hold_joint_vel_l2_mean_std', 0):.3f} | "
             f"{r.get('eval_success_mean_mean', float('nan')):.2f} ± {r.get('eval_success_mean_std', 0):.2f} |"
         )
+    lines.append("\n† kernel-specific units; descriptive only.\n")
 
-    def _fmt_stats(stats: dict, candidate: str, baseline: str, lower_is_better: bool) -> list[str]:
-        out = [f"\n### {candidate} vs {baseline}\n"]
-        out.append("| Task | n | Mean candidate | Mean baseline | t | p | Cohen's d | Verdict |")
-        out.append("|---|---|---|---|---|---|---|---|")
-        for task, st in stats.items():
+    lines.append("## Robust aggregates — IQM [95% bootstrap CI] over seeds\n")
+    lines.append("*Interquartile mean with seeded percentile bootstrap (B=10 000); "
+                 "robust to outlier seeds at small n.*\n")
+    lines.append("| Task | Kernel | Success rate | Hold joint vel (rad/s) | Drift ratio |")
+    lines.append("|---|---|---|---|---|")
+    for r in sorted(aggregates, key=lambda x: (x["task"], x["kernel"])):
+        def _fmt_iqm(key: str, fmt: str) -> str:
+            v = r.get(f"{key}_iqm", float("nan"))
+            lo = r.get(f"{key}_ci_lo", float("nan"))
+            hi = r.get(f"{key}_ci_hi", float("nan"))
+            return f"{v:{fmt}} [{lo:{fmt}}, {hi:{fmt}}]"
+        lines.append(
+            f"| {r['task']} | {r['kernel']} | "
+            f"{_fmt_iqm('eval_success_mean', '.2f')} | "
+            f"{_fmt_iqm('eval_hold_joint_vel_l2_mean', '.3f')} | "
+            f"{_fmt_iqm('tb_drift_ratio', '.3f')} |"
+        )
+
+    lines.append("\n## Pairwise comparisons (Welch's t-test, two-sided)\n")
+    lines.append("*p_holm = Holm-Bonferroni adjusted p across the whole test family; "
+                 "verdicts use p_holm < 0.05.*\n")
+    for comp in comparisons:
+        lines.append(f"\n### {comp['title']}\n")
+        lines.append(f"*candidate = `{comp['candidate']}`, baseline = `{comp['baseline']}`, "
+                     f"metric = `{comp['metric']}`*\n")
+        lines.append("| Task | n | Mean candidate | Mean baseline | t | p | p_holm | Cohen's d | Verdict |")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
+        for task, st in comp["stats"].items():
             if st.get("skipped"):
-                out.append(f"| {task} | — | — | — | — | — | — | (insufficient n) |")
+                lines.append(f"| {task} | {st.get('n_candidate', 0)}/{st.get('n_baseline', 0)} "
+                             f"| — | — | — | — | — | — | (insufficient n) |")
                 continue
             diff = st["candidate_mean"] - st["baseline_mean"]
-            improved = (diff < 0) if lower_is_better else (diff > 0)
-            significant = st["p_value"] < 0.05
+            improved = (diff < 0) if comp["lower_is_better"] else (diff > 0)
+            p_holm = st.get("p_holm", float("nan"))
+            significant = p_holm < 0.05
             verdict = (
                 "✓ significant improvement" if (improved and significant) else
                 "✗ significant regression" if (not improved and significant) else
                 "no significant difference"
             )
-            out.append(
+            lines.append(
                 f"| {task} | {st['n_candidate']}/{st['n_baseline']} | "
                 f"{st['candidate_mean']:.3f} ± {st['candidate_std']:.3f} | "
                 f"{st['baseline_mean']:.3f} ± {st['baseline_std']:.3f} | "
-                f"{st['t_statistic']:.2f} | {st['p_value']:.4f} | {st['cohens_d']:.2f} | {verdict} |"
+                f"{st['t_statistic']:.2f} | {st['p_value']:.4f} | {p_holm:.4f} | "
+                f"{st['cohens_d']:.2f} | {verdict} |"
             )
-        return out
-
-    lines.append("\n## Pairwise comparisons (Welch's t-test, two-sided)\n")
-    lines.append("\n### Peak reward (higher is better)\n")
-    lines.extend(_fmt_stats(stats_peak, "velocity_gated_tanh", "tanh", lower_is_better=False))
-    lines.append("\n### Drift ratio (lower is better)\n")
-    lines.extend(_fmt_stats(stats_drift, "velocity_gated_tanh", "gaussian", lower_is_better=True))
-    lines.append("\n### Hold joint velocity (lower is better)\n")
-    lines.extend(_fmt_stats(stats_hold_vel, "velocity_gated_tanh", "tanh", lower_is_better=True))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n")
@@ -312,11 +459,11 @@ def plot_bar(aggregates: list[dict], metric_mean_key: str, metric_std_key: str,
     import matplotlib.pyplot as plt
 
     tasks = sorted({r["task"] for r in aggregates})
-    kernels = ["tanh", "gaussian", "velocity_gated_tanh"]
+    kernels = sorted({r["kernel"] for r in aggregates})
     x = np.arange(len(tasks))
-    width = 0.25
+    width = 0.8 / max(1, len(kernels))
 
-    fig, ax = plt.subplots(figsize=(7, 4))
+    fig, ax = plt.subplots(figsize=(8, 4))
     for i, kernel in enumerate(kernels):
         means, stds = [], []
         for task in tasks:
@@ -328,7 +475,7 @@ def plot_bar(aggregates: list[dict], metric_mean_key: str, metric_std_key: str,
                 means.append(match[0].get(metric_mean_key, float("nan")))
                 stds.append(match[0].get(metric_std_key, 0))
         ax.bar(x + i * width, means, width, yerr=stds, capsize=4, label=kernel)
-    ax.set_xticks(x + width)
+    ax.set_xticks(x + 0.4 - width / 2)
     ax.set_xticklabels(tasks)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
@@ -342,20 +489,30 @@ def plot_bar(aggregates: list[dict], metric_mean_key: str, metric_std_key: str,
 
 
 def plot_pareto(cells: list[dict], plots_dir: Path) -> None:
-    """Scatter peak_reward (y) vs hold_joint_vel_l2 (x), colored by kernel."""
+    """Scatter success rate (y) vs hold_joint_vel_l2 (x), colored by kernel.
+
+    Both axes are kernel-independent eval metrics (training reward would be
+    incommensurable across kernels).
+    """
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(6, 5))
-    colors = {"tanh": "C0", "gaussian": "C1", "velocity_gated_tanh": "C2"}
-    for kernel in colors:
-        xs = [c["eval_hold_joint_vel_l2_mean"] for c in cells if c["kernel"] == kernel and not _is_nan(c.get("eval_hold_joint_vel_l2_mean", float("nan")))]
-        ys = [c["tb_peak_reward"] for c in cells if c["kernel"] == kernel and not _is_nan(c.get("tb_peak_reward", float("nan")))]
-        if not xs:
+    kernels = sorted({c["kernel"] for c in cells})
+    for i, kernel in enumerate(kernels):
+        pts = [
+            (c["eval_hold_joint_vel_l2_mean"], c["eval_success_mean"])
+            for c in cells
+            if c["kernel"] == kernel
+            and not _is_nan(c.get("eval_hold_joint_vel_l2_mean", float("nan")))
+            and not _is_nan(c.get("eval_success_mean", float("nan")))
+        ]
+        if not pts:
             continue
-        ax.scatter(xs, ys, c=colors[kernel], label=kernel, alpha=0.7, s=60)
+        xs, ys = zip(*pts)
+        ax.scatter(xs, ys, c=f"C{i}", label=kernel, alpha=0.7, s=60)
     ax.set_xlabel("Hold joint velocity (L2, rad/s) — lower is better")
-    ax.set_ylabel("Peak reward — higher is better")
-    ax.set_title("Pareto: hold stability vs. peak performance\n(top-left = best)")
+    ax.set_ylabel("Success rate — higher is better")
+    ax.set_title("Pareto: hold stability vs. task success\n(top-left = best)")
     ax.legend()
     ax.grid(alpha=0.3)
     out_path = plots_dir / "pareto_hold_vs_peak.png"
@@ -408,10 +565,8 @@ def main(argv: list[str] | None = None) -> int:
     write_csv(aggregates, tables_dir / "aggregates.csv")
     print(f"[velgate-analyze] wrote {tables_dir}/per_seed.csv and aggregates.csv")
 
-    # Stats
-    stats_peak = pairwise_stats(cells, "tb_peak_reward", baseline_kernel="tanh", candidate_kernel="velocity_gated_tanh")
-    stats_drift = pairwise_stats(cells, "tb_drift_ratio", baseline_kernel="gaussian", candidate_kernel="velocity_gated_tanh")
-    stats_hold_vel = pairwise_stats(cells, "eval_hold_joint_vel_l2_mean", baseline_kernel="tanh", candidate_kernel="velocity_gated_tanh")
+    # Stats: full comparison family + Holm-Bonferroni correction across it
+    comparisons = run_comparisons(cells)
 
     # Plots
     plots_dir = results_dir / "plots"
@@ -423,13 +578,17 @@ def main(argv: list[str] | None = None) -> int:
              ylabel="Hold joint velocity (L2, rad/s)", title="Goal-hold stability by kernel",
              out_path=plots_dir / "hold_vel_by_kernel.png")
     plot_bar(aggregates, "tb_peak_reward_mean", "tb_peak_reward_std",
-             ylabel="Peak reward", title="Peak training reward by kernel",
+             ylabel="Peak reward (kernel-specific units)",
+             title="Peak training reward by kernel (descriptive only)",
              out_path=plots_dir / "peak_reward_by_kernel.png")
+    plot_bar(aggregates, "eval_success_mean_mean", "eval_success_mean_std",
+             ylabel="Success rate", title="Eval success rate by kernel",
+             out_path=plots_dir / "success_by_kernel.png")
     plot_pareto(cells, plots_dir)
 
     # results.md
     docs_dir = _BENCH_DIR / "docs"
-    write_results_md(aggregates, stats_peak, stats_drift, stats_hold_vel, docs_dir / "results.md")
+    write_results_md(aggregates, comparisons, docs_dir / "results.md")
     print(f"[velgate-analyze] wrote {docs_dir}/results.md")
 
     return 0

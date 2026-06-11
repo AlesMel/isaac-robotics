@@ -112,102 +112,140 @@ def _run_eval_impl(
     arm_joint_pattern: str,
 ) -> dict:
     """Inner eval body (after Isaac Sim is launched)."""
+    import math
     import re
 
     import gymnasium as gym
-    import numpy as np
     import torch
     from isaaclab.utils.math import combine_frame_transforms
-    from isaaclab_tasks.utils import parse_env_cfg
+    from isaaclab_rl.skrl import SkrlVecEnvWrapper
+    from isaaclab_tasks.utils import load_cfg_from_registry, parse_env_cfg
     from skrl.utils.runner.torch import Runner
 
     # Trigger gym registration of this benchmark's variants
     import velgate_bench.envs  # noqa: F401
 
     env_cfg = parse_env_cfg(task, device="cuda", num_envs=num_envs)
+    env_cfg.seed = seed
     env = gym.make(task, cfg=env_cfg, render_mode=None)
+    # Keep a handle on the underlying ManagerBasedRLEnv for scene/command reads;
+    # the skrl wrapper below is what the *agent* observes and steps against.
+    base_env = env.unwrapped
 
-    # Load policy via the skrl Runner (mirrors play.py logic)
-    runner_cfg_path = gym.spec(task).kwargs["skrl_cfg_entry_point"]
-    from isaaclab_tasks.utils import load_cfg_from_registry
-
+    # Load policy via the skrl Runner (mirrors scripts/skrl/play.py). The env
+    # MUST be wrapped with SkrlVecEnvWrapper *before* the Runner so obs/actions
+    # are flat tensors in skrl's format. The previous version passed the raw
+    # env and stepped it directly, so the agent received dict observations and
+    # produced garbage actions -- which drove the sim into a NaN state and hung
+    # the rollout forever (episodes never terminated).
     runner_cfg = load_cfg_from_registry(task, "skrl_cfg_entry_point")
+    runner_cfg["seed"] = seed
+    runner_cfg["trainer"]["close_environment_at_exit"] = False
+    runner_cfg["agent"]["experiment"]["write_interval"] = 0       # no TB during eval
+    runner_cfg["agent"]["experiment"]["checkpoint_interval"] = 0   # no ckpts during eval
+
+    env = SkrlVecEnvWrapper(env, ml_framework="torch")
     runner = Runner(env, runner_cfg)
     runner.agent.load(checkpoint)
     runner.agent.set_running_mode("eval")
 
     # Resolve arm joint ids for velocity metric (regex against joint names)
-    robot = env.unwrapped.scene["robot"]
+    robot = base_env.scene["robot"]
     arm_re = re.compile(arm_joint_pattern)
     arm_joint_ids = [i for i, n in enumerate(robot.joint_names) if arm_re.match(n)]
+    if not arm_joint_ids:
+        print(f"[velgate-eval] WARNING: arm_joint_pattern {arm_joint_pattern!r} matched no "
+              f"joints in {robot.joint_names}; falling back to all joints.", flush=True)
+        arm_joint_ids = list(range(len(robot.joint_names)))
 
-    # Eval loop: collect per-episode metrics across `num_episodes` total
+    # Eval loop config
     hold_window_s = 2.0
-    decimation = env_cfg.decimation
-    sim_dt = env_cfg.sim.dt
-    step_dt = decimation * sim_dt
+    step_dt = base_env.step_dt
+    max_steps = int(base_env.max_episode_length)  # env truncates at this many steps
     hold_steps = int(hold_window_s / step_dt)
-    max_steps = int(env_cfg.episode_length_s / step_dt)
     success_eps = 0.03  # m, cube within 3cm of goal at end = success
     goal_eps = 0.05  # m, "at goal" means within 5cm
 
+    # Hard step ceiling so the rollout can NEVER spin forever (defence in depth
+    # on top of the sweep's per-cell timeout): gathering num_episodes across
+    # num_envs needs ceil(num_episodes/num_envs) episode lengths; add slack.
+    waves = math.ceil(num_episodes / num_envs)
+    step_budget = max(3, waves + 2) * max_steps
+
     per_episode_buf: list[list[dict]] = [[] for _ in range(num_envs)]
-    obs_traj: list[torch.Tensor] = []
     completed: list[dict] = []
 
-    obs, _ = env.reset(seed=seed)
+    obs, _ = env.reset()
 
-    while len(completed) < num_episodes:
+    step_i = 0
+    while len(completed) < num_episodes and step_i < step_budget:
         with torch.inference_mode():
             outputs = runner.agent.act(obs, timestep=0, timesteps=0)
             actions = outputs[-1].get("mean_actions", outputs[0])
-        obs, rewards, terminated, truncated, _ = env.step(actions)
-        done = terminated | truncated
+            obs, rewards, terminated, truncated, _ = env.step(actions)
+            done = (terminated.to(torch.bool) | truncated.to(torch.bool)).reshape(-1)
 
-        # Per-step instrumentation (vectorised across envs)
-        with torch.inference_mode():
-            scene = env.unwrapped.scene
+            # Per-step instrumentation, read straight from the base env's scene.
+            scene = base_env.scene
             robot_data = scene["robot"].data
             obj_data = scene["object"].data
             ee_frame = scene["ee_frame"]
-            command = env.unwrapped.command_manager.get_command("object_pose")
+            command = base_env.command_manager.get_command("object_pose")
             des_pos_b = command[:, :3]
             des_pos_w, _ = combine_frame_transforms(
                 robot_data.root_pos_w, robot_data.root_quat_w, des_pos_b
             )
             distance = torch.norm(des_pos_w - obj_data.root_pos_w, dim=1)
-            joint_vels = robot_data.joint_vel[:, arm_joint_ids]
-            joint_vel_mag = torch.norm(joint_vels, dim=1)
+            joint_vel_mag = torch.norm(robot_data.joint_vel[:, arm_joint_ids], dim=1)
             ee_z = ee_frame.data.target_pos_w[..., 0, 2]
 
-            for env_id in range(num_envs):
-                per_episode_buf[env_id].append(
-                    {
-                        "reward": float(rewards[env_id]),
-                        "distance": float(distance[env_id]),
-                        "joint_vel_mag": float(joint_vel_mag[env_id]),
-                        "ee_z": float(ee_z[env_id]),
-                    }
-                )
+        # One GPU->CPU sync per quantity per step (not one per env), then index
+        # the numpy arrays cheaply in the per-env loop below.
+        rewards_np = rewards.reshape(-1).detach().cpu().numpy()
+        distance_np = distance.detach().cpu().numpy()
+        jvm_np = joint_vel_mag.detach().cpu().numpy()
+        eez_np = ee_z.detach().cpu().numpy()
+        done_np = done.detach().cpu().numpy()
+
+        for env_id in range(num_envs):
+            per_episode_buf[env_id].append(
+                {
+                    "reward": float(rewards_np[env_id]),
+                    "distance": float(distance_np[env_id]),
+                    "joint_vel_mag": float(jvm_np[env_id]),
+                    "ee_z": float(eez_np[env_id]),
+                }
+            )
 
         # Episode boundaries: aggregate, then clear that env's buffer
         for env_id in range(num_envs):
-            if not done[env_id]:
+            if not done_np[env_id]:
                 continue
             traj = per_episode_buf[env_id]
+            per_episode_buf[env_id] = []
             if not traj:
                 continue
-            ep_metrics = _episode_metrics(
-                traj=traj,
-                hold_steps=hold_steps,
-                success_eps=success_eps,
-                goal_eps=goal_eps,
-                step_dt=step_dt,
+            completed.append(
+                _episode_metrics(
+                    traj=traj,
+                    hold_steps=hold_steps,
+                    success_eps=success_eps,
+                    goal_eps=goal_eps,
+                    step_dt=step_dt,
+                )
             )
-            completed.append(ep_metrics)
-            per_episode_buf[env_id] = []
             if len(completed) >= num_episodes:
                 break
+
+        step_i += 1
+        if step_i % 100 == 0:
+            print(f"[velgate-eval]   step {step_i}/{step_budget}  "
+                  f"episodes {len(completed)}/{num_episodes}", flush=True)
+
+    if len(completed) < num_episodes:
+        print(f"[velgate-eval] WARNING: step budget ({step_budget}) exhausted with only "
+              f"{len(completed)}/{num_episodes} episodes collected; aggregating those.",
+              flush=True)
 
     env.close()
 
@@ -215,6 +253,8 @@ def _run_eval_impl(
     agg["task"] = task
     agg["checkpoint"] = str(checkpoint)
     agg["seed"] = seed
+    agg["n_episodes_requested"] = num_episodes
+    agg["n_episodes_collected"] = len(completed)
 
     if out:
         Path(out).parent.mkdir(parents=True, exist_ok=True)

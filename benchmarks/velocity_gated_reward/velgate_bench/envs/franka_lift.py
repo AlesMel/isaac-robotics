@@ -36,6 +36,8 @@ _KERNEL_DISPLAY = {
     "tanh": "Tanh",
     "gaussian": "Gaussian",
     "velocity_gated_tanh": "VelocityGatedTanh",
+    "tanh_additive_velpen": "TanhAdditiveVelPen",
+    "velocity_gated_tanh_smooth": "VelocityGatedTanhSmooth",
 }
 
 

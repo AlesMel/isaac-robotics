@@ -1,11 +1,10 @@
-# Ignore all raw results; structure is recreated by scripts/run_sweep.sh
+# Raw training/eval artifacts are large and regenerable -- ignored.
+# tables/ and plots/ ARE tracked: they are the small, publication-relevant
+# outputs of analyze.py and reviewers want them versioned.
 runs/
 eval/
-plots/
-tables/
+_archive*/
+manifest.json
 
-# Keep the directory structure
-!runs/.gitkeep
-!eval/.gitkeep
-!plots/.gitkeep
-!tables/.gitkeep
+# Keep the directory placeholder
+!.gitkeep
