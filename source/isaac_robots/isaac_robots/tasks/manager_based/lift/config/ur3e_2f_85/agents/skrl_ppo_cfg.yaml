@@ -1,0 +1,73 @@
+# skrl PPO config for the UR3e + Hand-E manager-based lift-cube task.
+
+seed: 42
+
+models:
+  separate: False
+  policy:
+    class: GaussianMixin
+    clip_actions: False
+    clip_log_std: True
+    min_log_std: -2.0   # std floor = exp(-2) ~= 0.135; prevents policy from collapsing to deterministic
+    max_log_std: 0.0    # std ceiling = exp(0) = 1.0; prevents runaway std growth (was 2.0 -> std could reach 7.4, observed 1.62 in run 11-44, chaotic policy)
+    initial_log_std: -1.0
+    network:
+      - name: net
+        input: OBSERVATIONS
+        layers: [256, 128, 64]
+        activations: elu
+    output: ACTIONS
+  value:
+    class: DeterministicMixin
+    clip_actions: False
+    network:
+      - name: net
+        input: OBSERVATIONS
+        layers: [256, 128, 64]
+        activations: elu
+    output: ONE
+
+
+memory:
+  class: RandomMemory
+  memory_size: -1
+
+
+agent:
+  class: PPO
+  rollouts: 32
+  learning_epochs: 8
+  mini_batches: 4
+  discount_factor: 0.99
+  lambda: 0.95
+  learning_rate: 3.0e-04
+  learning_rate_scheduler: KLAdaptiveLR
+  learning_rate_scheduler_kwargs:
+    kl_threshold: 0.008
+    min_lr: 1.0e-05  # floor: avoid LR decaying to ~0 and killing recovery
+  state_preprocessor: RunningStandardScaler
+  state_preprocessor_kwargs: null
+  value_preprocessor: RunningStandardScaler
+  value_preprocessor_kwargs: null
+  random_timesteps: 5000  # pure random exploration before PPO kicks in; reaching_object reward is near-zero when arm starts far from cube (1-tanh(0.3/0.1)~=0.005), so without this PPO learns to stand still -- only lucky weight inits converge (observed 3/5 seeds flat)
+  learning_starts: 0
+  grad_norm_clip: 1.0
+  ratio_clip: 0.2
+  value_clip: 0.2
+  clip_predicted_values: True
+  entropy_loss_scale: 0.005   # 0.01 caused std runaway (combined with widened fine-grained reward); back to 0.005 + min_log_std floor handles collapse prevention
+  value_loss_scale: 2.0
+  kl_threshold: 0.0
+  rewards_shaper_scale: 1.0
+  time_limit_bootstrap: False
+  experiment:
+    directory: "ur3e_2f_85_lift_cube"
+    experiment_name: ""
+    write_interval: auto
+    checkpoint_interval: auto
+
+
+trainer:
+  class: SequentialTrainer
+  timesteps: 300000
+  environment_info: log

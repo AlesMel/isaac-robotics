@@ -230,3 +230,102 @@ UR3E_ROBOTIQ_HANDE_CFG.actuators["gripper_slide"] = ImplicitActuatorCfg(
     friction=0.0,
     armature=0.0,
 )
+
+UR3E_2F85_USD = os.getenv(
+    "UR3E_ROBOTIQ_2F85_USD_PATH",
+    str(_REPO_ROOT / "source" / "isaac_robots" / "data" / "ur3e" / "ur3e_robotiq_2f85.usd"),
+)
+
+UR3e_ROBOTIQ_2F85_CFG = ArticulationCfg(
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=UR3E_2F85_USD,
+        # NOTE: manually-assembled USD => NO `variants={...}` here.
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            # Robot links weightless (implicit gravity comp) — cube still has gravity.
+            disable_gravity=True,
+            max_depenetration_velocity=5.0,
+        ),
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            enabled_self_collisions=False,
+            # Grippers need high iteration counts to stay stable on contact.
+            solver_position_iteration_count=64,
+            solver_velocity_iteration_count=16,
+        ),
+        activate_contact_sensors=True,  # useful for grasp detection / contact rewards
+    ),
+    init_state=ArticulationCfg.InitialStateCfg(
+        joint_pos={
+            "shoulder_pan_joint": 0.0,
+            "shoulder_lift_joint": -1.5707,
+            "elbow_joint": 1.5707,
+            "wrist_1_joint": 1.5707,
+            "wrist_2_joint": 1.5707,
+            "wrist_3_joint": 0.0,
+            # 0.0 == OPEN by the standard Robotiq convention — VERIFY (see header).
+            "finger_joint": 0.0,
+        },
+        pos=(0.0, 0.0, 0.0),
+        rot=(1.0, 0.0, 0.0, 0.0),
+    ),
+    actuators={
+        # ---------------- arm (values from the stock UR3e cfg) ----------------
+        "shoulder": ImplicitActuatorCfg(
+            joint_names_expr=["shoulder_.*"],
+            stiffness=1320.0,
+            damping=72.6636085,
+            friction=0.0,
+            armature=0.0,
+        ),
+        "elbow": ImplicitActuatorCfg(
+            joint_names_expr=["elbow_joint"],
+            stiffness=600.0,
+            damping=34.64101615,
+            friction=0.0,
+            armature=0.0,
+        ),
+        "wrist": ImplicitActuatorCfg(
+            joint_names_expr=["wrist_.*"],
+            stiffness=216.0,
+            damping=29.39387691,
+            friction=0.0,
+            armature=0.0,
+        ),
+
+        # ---------------- gripper: the single driven joint ----------------
+        "gripper": ImplicitActuatorCfg(
+            joint_names_expr=["finger_joint"],
+            effort_limit_sim=10.0,
+            velocity_limit_sim=1.0,
+            stiffness=11.25,
+            damping=0.1,
+            friction=0.0,
+            armature=0.0,
+        ),
+        # # ---------------- gripper: light auxiliary joints ----------------
+        # # Help the underactuated linkage track the driver.
+        # "gripper_finger": ImplicitActuatorCfg(
+        #     joint_names_expr=[".*_inner_finger_joint"],
+        #     effort_limit_sim=1.0,
+        #     velocity_limit_sim=1.0,
+        #     stiffness=0.2,
+        #     damping=0.001,
+        #     friction=0.0,
+        #     armature=0.0,
+        # ),
+        
+        # # ---------------- gripper: passive joints ----------------
+        # # Driven by the USD mimic constraints; zero stiffness/damping here.
+        # "gripper_passive": ImplicitActuatorCfg(
+        #     joint_names_expr=[
+        #         ".*_inner_finger_knuckle_joint",   # left_ + right_inner_finger_knuckle_joint
+        #         "right_outer_knuckle_joint",
+        #     ],
+        #     effort_limit_sim=1.0,
+        #     velocity_limit_sim=1.0,
+        #     stiffness=0.0,
+        #     damping=0.0,
+        #     friction=0.0,
+        #     armature=0.0,
+        # ),
+    },
+)
