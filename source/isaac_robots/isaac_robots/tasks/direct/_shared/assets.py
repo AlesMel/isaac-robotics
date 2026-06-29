@@ -236,6 +236,11 @@ UR3E_2F85_USD = os.getenv(
     str(_REPO_ROOT / "source" / "isaac_robots" / "data" / "ur3e" / "ur3e_robotiq_2f85.usd"),
 )
 
+UR3E_2F140_USD = os.getenv(
+    "UR3E_ROBOTIQ_2F140_USD_PATH",
+    str(_REPO_ROOT / "source" / "isaac_robots" / "data" / "ur3e" / "ur3e_robotiq_2f140.usd"),
+)
+
 UR3e_ROBOTIQ_2F85_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=UR3E_2F85_USD,
@@ -254,13 +259,19 @@ UR3e_ROBOTIQ_2F85_CFG = ArticulationCfg(
         activate_contact_sensors=True,  # useful for grasp detection / contact rewards
     ),
     init_state=ArticulationCfg.InitialStateCfg(
+        # "Ready over table" pose: TCP hovers at ~(0.40, 0.00, 0.20) m in the base
+        # frame, gripper pointing straight down, centered over the cube reset region.
+        # This is critical for RL: with the old tucked pose [0,-1.57,1.57,1.57,1.57,0]
+        # the TCP started ~0.32 m from the cube, in the dead zone of the
+        # `1 - tanh(d/0.1)` reaching reward (reward ~0.003, no gradient) -> the policy
+        # never bootstrapped and training was flat. Verified via UR3e FK from the URDF.
         joint_pos={
-            "shoulder_pan_joint": 0.0,
-            "shoulder_lift_joint": -1.5707,
-            "elbow_joint": 1.5707,
-            "wrist_1_joint": 1.5707,
-            "wrist_2_joint": 1.5707,
-            "wrist_3_joint": 0.0,
+            "shoulder_pan_joint": -0.33,
+            "shoulder_lift_joint": -1.21,
+            "elbow_joint": 0.97,
+            "wrist_1_joint": -1.33,
+            "wrist_2_joint": -1.57,
+            "wrist_3_joint": -0.34,
             # 0.0 == OPEN by the standard Robotiq convention — VERIFY (see header).
             "finger_joint": 0.0,
         },
@@ -292,12 +303,18 @@ UR3e_ROBOTIQ_2F85_CFG = ArticulationCfg(
         ),
 
         # ---------------- gripper: the single driven joint ----------------
+        # Gains copied from Isaac Lab's known-good FRANKA_ROBOTIQ_GRIPPER_CFG
+        # "gripper_drive" (same Robotiq 2F-85). The old effort_limit_sim=10 capped
+        # grip force ~165x too low -> the drive saturated under load, the gripper
+        # never closed/held firmly, and the policy resorted to scooping. The 5
+        # passive linkage joints stay UN-actuated: they're driven by the USD PhysX
+        # mimic (verified working), and adding drives would fight that constraint.
         "gripper": ImplicitActuatorCfg(
             joint_names_expr=["finger_joint"],
-            effort_limit_sim=10.0,
-            velocity_limit_sim=1.0,
-            stiffness=11.25,
-            damping=0.1,
+            effort_limit_sim=1650.0,
+            velocity_limit_sim=10.0,
+            stiffness=17.0,
+            damping=0.02,
             friction=0.0,
             armature=0.0,
         ),
@@ -327,5 +344,108 @@ UR3e_ROBOTIQ_2F85_CFG = ArticulationCfg(
         #     friction=0.0,
         #     armature=0.0,
         # ),
+    },
+)
+
+
+# ---------------------------------------------------------------------------
+# UR3e + Robotiq 2F-140 (wider-stroke sibling of the 2F-85)
+# ---------------------------------------------------------------------------
+# Duplicated from UR3e_ROBOTIQ_2F85_CFG; the GRIPPER SCHEME IS THE OPPOSITE.
+#   * USD asset (assembled ur3e_robotiq_2f140.usd, payloads NVIDIA's 2F-140).
+#   * finger_joint range is 0..45 deg (0..0.785 rad) vs the 2F-85's 0..47 deg
+#     -> the env's close_command must use 0.785, not 0.82.
+#   * NO MIMIC, NO LOOP CLOSURE. Unlike the 2F-85 (which composes
+#     Robotiq_2F_85_phyisics_mimic.usda + _phyisics_loop.usda), NVIDIA's
+#     Robotiq_2F_140_physics_edit ships zero mimic joints (verified across every
+#     Nucleus 2F-140 variant). So you CANNOT drive finger_joint alone: the other
+#     9 gripper joints would be left at the asset's weak/zero USD gains, uncoupled
+#     and floppy -> the fingers barely move. This is exactly the "doesn't move" bug.
+#   * FIX (IsaacLab Discussions #4124 / #1908, same UR3e+2F-140 asset): ACTUATE ALL
+#     gripper joints in 3 groups and INITIALISE all of them (kinematic loop needs it).
+#     Use the asset's WEAK finger_joint gains (k=11.25/maxF=10) -- the 2F-85's strong
+#     k=17/maxF=1650 over-powers the loop and kicks the arm back when grasping.
+#     NB: the gripper_finger/gripper_passive groups that are a TRAP for the 2F-85
+#     (they fight its mimic) are exactly what the 2F-140 NEEDS (no mimic to fight).
+UR3e_ROBOTIQ_2F140_CFG = ArticulationCfg(
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=UR3E_2F140_USD,
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            disable_gravity=True,
+            max_depenetration_velocity=5.0,
+        ),
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            enabled_self_collisions=False,
+            solver_position_iteration_count=64,
+            solver_velocity_iteration_count=16,
+        ),
+        activate_contact_sensors=True,
+    ),
+    init_state=ArticulationCfg.InitialStateCfg(
+        # Same FK-derived "ready over table" arm pose as the 2F-85 (identical UR3e arm).
+        # The 2F-140 is a little longer, so the TCP sits slightly lower with this pose;
+        # still well inside the reaching-reward zone.
+        joint_pos={
+            "shoulder_pan_joint": -0.33,
+            "shoulder_lift_joint": -1.21,
+            "elbow_joint": 0.97,
+            "wrist_1_joint": -1.33,
+            "wrist_2_joint": -1.57,
+            "wrist_3_joint": -0.34,
+            # ALL 8 articulated gripper joints must be initialised (kinematic loop).
+            # NB: the *_inner_knuckle_joints are loop-closure joints and are NOT in
+            # the PhysX articulation tree, so they must NOT appear here.
+            "finger_joint": 0.0,  # 0.0 == OPEN; the single driven joint
+            ".*_inner_finger_joint": 0.0,
+            ".*_inner_finger_pad_joint": 0.0,
+            ".*_outer_finger_joint": 0.0,
+            ".*_outer_knuckle_joint": 0.0,
+        },
+        pos=(0.0, 0.0, 0.0),
+        rot=(1.0, 0.0, 0.0, 0.0),
+    ),
+    actuators={
+        "shoulder": ImplicitActuatorCfg(
+            joint_names_expr=["shoulder_.*"], stiffness=1320.0, damping=72.6636085, friction=0.0, armature=0.0,
+        ),
+        "elbow": ImplicitActuatorCfg(
+            joint_names_expr=["elbow_joint"], stiffness=600.0, damping=34.64101615, friction=0.0, armature=0.0,
+        ),
+        "wrist": ImplicitActuatorCfg(
+            joint_names_expr=["wrist_.*"], stiffness=216.0, damping=29.39387691, friction=0.0, armature=0.0,
+        ),
+        # ---- 2F-140 gripper: actuate ALL joints (no mimic to couple them) ----
+        # The single driven joint. WEAK gains on purpose (asset's authored values);
+        # strong gains here destabilise the loop and kick the arm back on contact.
+        "gripper_drive": ImplicitActuatorCfg(
+            joint_names_expr=["finger_joint"],
+            effort_limit_sim=10.0,
+            velocity_limit_sim=1.0,
+            stiffness=11.25,
+            damping=0.1,
+            friction=0.0,
+            armature=0.0,
+        ),
+        # Inner fingers: soft springs that keep the pads parallel as it closes.
+        "gripper_finger": ImplicitActuatorCfg(
+            joint_names_expr=[".*_inner_finger_joint"],
+            stiffness=0.2,
+            damping=0.001,
+            friction=0.0,
+            armature=0.0,
+        ),
+        # Everything else in the articulation linkage: passive (zero drive).
+        # (The *_inner_knuckle_joints are loop-closure joints, not in the tree.)
+        "gripper_passive": ImplicitActuatorCfg(
+            joint_names_expr=[
+                ".*_outer_knuckle_joint",
+                ".*_outer_finger_joint",
+                ".*_inner_finger_pad_joint",
+            ],
+            stiffness=0.0,
+            damping=0.0,
+            friction=0.0,
+            armature=0.0,
+        ),
     },
 )

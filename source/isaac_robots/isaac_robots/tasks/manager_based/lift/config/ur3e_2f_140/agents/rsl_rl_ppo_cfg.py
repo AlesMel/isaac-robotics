@@ -11,13 +11,11 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 @configclass
 class LiftCubePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
-    max_iterations = 2000
+    max_iterations = 1500
     save_interval = 100
-    experiment_name = "ur3e_2f_85_lift_cube"
+    experiment_name = "ur3e_2f_140_lift_cube"
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
-        #actor_obs_normalization=False,
-        #critic_obs_normalization=False,
         actor_hidden_dims=[256, 128, 64],
         critic_hidden_dims=[256, 128, 64],
         activation="elu",

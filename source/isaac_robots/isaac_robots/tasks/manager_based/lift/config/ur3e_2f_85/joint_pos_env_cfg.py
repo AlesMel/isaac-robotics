@@ -14,11 +14,13 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
-from isaaclab_tasks.manager_based.manipulation.lift.config.ur3e_2f_85.lift_ur3e_2f85_env_cfg import LiftEnvCfg
 from isaac_robots.tasks.direct._shared.assets import UR3e_ROBOTIQ_2F85_CFG
 from isaaclab.sensors import ContactSensorCfg
 from . import mdp_grasp_rewards as gmdp
 from isaaclab.managers import RewardTermCfg as RewTerm
+import math
+
+from .lift_ur3e_2f85_env_cfg import LiftEnvCfg
 
 @configclass
 class UR3e2F85CubeLiftEnvCfg(LiftEnvCfg):
@@ -58,24 +60,26 @@ class UR3e2F85CubeLiftEnvCfg(LiftEnvCfg):
         # The lift reward uses object<->ee distance, so the TCP offset matters.
         # MEASURE the offset from wrist_3_link to the fingertip in your assembled
         # USD (GUI: read both body world positions). ~0.15 m is a 2F-85 starting guess.
-        marker_cfg = FRAME_MARKER_CFG.copy()
-        marker_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
-        marker_cfg.prim_path = "/Visuals/FrameTransformer"
-        self.scene.ee_frame = FrameTransformerCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/ur3e/base_link",
-            debug_vis=False,
-            visualizer_cfg=marker_cfg,
-            target_frames=[
-                FrameTransformerCfg.FrameCfg(
-                    prim_path="{ENV_REGEX_NS}/Robot/ur3e/wrist_3_link",
-                    name="end_effector",
-                    offset=OffsetCfg(pos=(0.0, 0.0, 0.14)),  # verified visually at default pose: marker between the 2F-85 jaws
-                ),
-            ],
-        )
+        # marker_cfg = FRAME_MARKER_CFG.copy()
+        # marker_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
+        # marker_cfg.prim_path = "/Visuals/FrameTransformer"
+
+        # self.scene.ee_frame = FrameTransformerCfg(
+        #     prim_path="{ENV_REGEX_NS}/Robot/ur3e/base_link",
+        #     debug_vis=False,
+        #     visualizer_cfg=marker_cfg,
+        #     target_frames=[
+        #         FrameTransformerCfg.FrameCfg(
+        #             prim_path="{ENV_REGEX_NS}/Robot/ur3e/wrist_3_link",
+        #             name="end_effector",
+        #             offset=OffsetCfg(pos=(0.0, 0.0, 0.14)),  # verified visually at default pose: marker between the 2F-85 jaws
+        #         ),
+        #     ],
+        # )
 
         # Pose-command target body (there is no panda_hand here).
         self.commands.object_pose.body_name = "wrist_3_link"
+        self.commands.object_pose.ranges.pitch = (math.pi / 2, math.pi / 2)  # keep the cube upright for lift
 
         # ---------------- object to lift ----------------
         self.scene.object = RigidObjectCfg(
@@ -95,35 +99,32 @@ class UR3e2F85CubeLiftEnvCfg(LiftEnvCfg):
             ),
         )
 
+        self.scene.ee_frame = FrameTransformerCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/ur3e/base_link",
+            debug_vis=False,
+            target_frames=[
+                FrameTransformerCfg.FrameCfg(
+                    prim_path="{ENV_REGEX_NS}/Robot/ur3e/wrist_3_link",
+                    name="end_effector",
+                    offset=OffsetCfg(pos=(0.0, 0.0, 0.14)),
+                ),
+            ],
+        )
+
         # ---------------- workspace tuning ----------------
         # The UR3e reach (~0.5 m) is much smaller than the Franka's. If the lift
         # targets fall outside reach the policy can't learn — tighten the ranges.
-        self.commands.object_pose.ranges.pos_x = (0.35, 0.50)
-        self.commands.object_pose.ranges.pos_y = (-0.20, 0.20)
-        self.commands.object_pose.ranges.pos_z = (0.15, 0.35)
-
-        self.scene.contact_left_finger = ContactSensorCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/Robotiq_2F_85_edit/Robotiq_2F_85/left_inner_finger",
-            update_period=0.0,
-            debug_vis=False,
-        )
-        self.scene.contact_right_finger = ContactSensorCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/Robotiq_2F_85_edit/Robotiq_2F_85/right_inner_finger",
-            update_period=0.0,
-            debug_vis=False,
-        )
-        
-        self.rewards.grasping = RewTerm(
-            func=gmdp.lift_with_grasp_gate,
-            weight=1.0,
-            params={
-                "object_cfg": "object",
-                "ee_frame_cfg": "ee_frame", # Crucial for the dense reaching term!
-                "left_sensor_name": "contact_left_finger",
-                "right_sensor_name": "contact_right_finger",
-                "force_threshold": 0.5,
-            },
-        )
+        # self.commands.object_pose.ranges.pitch = (math.pi / 2, math.pi / 2)
+        # self.scene.contact_left_finger = ContactSensorCfg(
+        #     prim_path="{ENV_REGEX_NS}/Robot/Robotiq_2F_85_edit/Robotiq_2F_85/left_inner_finger",
+        #     update_period=0.0,
+        #     debug_vis=False,
+        # )
+        # self.scene.contact_right_finger = ContactSensorCfg(
+        #     prim_path="{ENV_REGEX_NS}/Robot/Robotiq_2F_85_edit/Robotiq_2F_85/right_inner_finger",
+        #     update_period=0.0,
+        #     debug_vis=False,
+        # )
 
 @configclass
 class UR3e2F85CubeLiftEnvCfg_PLAY(UR3e2F85CubeLiftEnvCfg):
