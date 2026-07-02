@@ -87,7 +87,7 @@ class UR3e2F140CubeLiftEnvCfg(LiftEnvCfg):
         # the 2F-140 fingertips at the default pose) and adjust if it's off.
         self.scene.ee_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Robot/ur3e/base_link",
-            debug_vis=False,
+            debug_vis=False,  # show the end_effector marker; set offset so it sits between the jaws
             target_frames=[
                 FrameTransformerCfg.FrameCfg(
                     prim_path="{ENV_REGEX_NS}/Robot/ur3e/wrist_3_link",

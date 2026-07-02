@@ -222,5 +222,5 @@ class UR3eHandECubeLiftEnvCfg_PLAY(UR3eHandECubeLiftEnvCfg):
         # the grasp-point offset (tool0 + (0, 0, 0.119)) actually sits between
         # the Hand-E pads. Goal-pose command marker is disabled to avoid
         # visual clutter (upstream defaults it to True).
-        self.scene.ee_frame.debug_vis = True
+        self.scene.ee_frame.debug_vis = False
         self.commands.object_pose.debug_vis = False

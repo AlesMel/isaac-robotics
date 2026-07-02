@@ -419,23 +419,35 @@ UR3e_ROBOTIQ_2F140_CFG = ArticulationCfg(
         # strong gains here destabilise the loop and kick the arm back on contact.
         "gripper_drive": ImplicitActuatorCfg(
             joint_names_expr=["finger_joint"],
-            effort_limit_sim=10.0,
-            velocity_limit_sim=1.0,
-            stiffness=11.25,
-            damping=0.1,
+            # Grip FORCE. The linkage closes fine (loop closure verified), but at
+            # effort=10 the drive saturated on contact and couldn't hold -> scoop.
+            # 1650 (the 2F-85 value) holds, BUT the 2F-85 absorbs the closing
+            # reaction in its MIMIC; the 2F-140 has none, so that force goes through
+            # the loop into the wrist and KICKS the arm (-> rapid jerky arm motion).
+            # 400 is the compromise: 40x the original grip (holds the cube) but a
+            # much gentler reaction. Raise toward 1650 only if it slips; drop toward
+            # 200 if the arm still gets kicked.
+            effort_limit_sim=400.0,
+            velocity_limit_sim=10.0,
+            stiffness=17.0,
+            damping=0.5,
             friction=0.0,
-            armature=0.0,
+            armature=0.01,
         ),
         # Inner fingers: soft springs that keep the pads parallel as it closes.
         "gripper_finger": ImplicitActuatorCfg(
             joint_names_expr=[".*_inner_finger_joint"],
             stiffness=0.2,
-            damping=0.001,
+            damping=0.1,
             friction=0.0,
-            armature=0.0,
+            armature=0.01,
         ),
-        # Everything else in the articulation linkage: passive (zero drive).
-        # (The *_inner_knuckle_joints are loop-closure joints, not in the tree.)
+        # Everything else in the articulation linkage. UNLIKE the 2F-85, the 2F-140
+        # has NO mimic constraint holding this linkage -- only a PhysX loop closure.
+        # With zero damping/armature those passive joints ring up on contact (the
+        # loop pumps in energy with nothing to dissipate it) -> velocities blow up
+        # -> the whole articulation NaNs and vanishes from the scene. The 2F-85 gets
+        # this damping "for free" from its mimic; the 2F-140 must set it explicitly.
         "gripper_passive": ImplicitActuatorCfg(
             joint_names_expr=[
                 ".*_outer_knuckle_joint",
@@ -443,9 +455,9 @@ UR3e_ROBOTIQ_2F140_CFG = ArticulationCfg(
                 ".*_inner_finger_pad_joint",
             ],
             stiffness=0.0,
-            damping=0.0,
+            damping=0.1,
             friction=0.0,
-            armature=0.0,
+            armature=0.01,
         ),
     },
 )
